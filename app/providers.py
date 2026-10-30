@@ -131,6 +131,24 @@ def _nex_type() -> int:
         return 1
 
 
+# Upstream card types: 1 = 首次卡 (fresh number), 2 = 重启卡 (re-login),
+# 3 = 续费卡 (recycled number, already bound to an account). Selling a 续费卡 as
+# if it were a 首次卡 is exactly how customers end up "receiving nothing", so the
+# type is strict by default and is always recorded on the number / relay row.
+TYPE_NAMES = {1: "首次卡", 2: "重启卡", 3: "续费卡"}
+
+
+def _type_name(t) -> str:
+    try:
+        return TYPE_NAMES.get(int(t), "")
+    except Exception:
+        return ""
+
+
+def _nex_type_strict() -> bool:
+    return (db.get_setting("nexsms_type_strict", "1") or "1") == "1"
+
+
 def _nex_expiry() -> int:
     try:
         return max(0, min(6, int(db.get_setting("nexsms_expiry", "0") or 0)))
@@ -289,15 +307,27 @@ def _nex_candidates(country: str) -> list:
         raise ProviderError("NexSMS API Key 未配置")
     cache_key = (_nex_base(), key, project, country, preferred_type)
     now = time.time()
+
+    def _strict_only(items):
+        # Cached lists may still hold a fallback type bought before strict mode
+        # was turned on; drop those instead of handing them out again.
+        if not _nex_type_strict():
+            return items
+        return [x for x in items if int(x.get("type") or 0) == preferred_type]
+
     with _NEX_LOCK:
         hit = _NEX_CACHE.get(cache_key)
         if hit and now - hit[0] < 300:
-            return [dict(x) for x in hit[1]]
+            cached = _strict_only([dict(x) for x in hit[1]])
+            if cached:
+                return cached
     disk = _nex_cache_load(country, project, preferred_type)
     if disk:
-        with _NEX_LOCK:
-            _NEX_CACHE[cache_key] = (now, [dict(x) for x in disk])
-        return [dict(x) for x in disk]
+        cached = _strict_only([dict(x) for x in disk])
+        if cached:
+            with _NEX_LOCK:
+                _NEX_CACHE[cache_key] = (now, [dict(x) for x in cached])
+            return cached
 
     cats = _nex_http("GET", "/api/premium/categories") or {}
     cat_list = cats.get("list") or []
@@ -309,6 +339,9 @@ def _nex_candidates(country: str) -> list:
             pass
     order = [preferred_type] + [t for t in type_ids if t != preferred_type] + [1, 2, 3]
     order = list(dict.fromkeys(order))
+    if _nex_type_strict():
+        # Strict: never silently swap 首次卡 for a 续费卡 just because it is in stock.
+        order = [preferred_type]
 
     # Region-matching categories first (usually 1-2), then the rest as fallback.
     region_cats = [c for c in cat_list if _nex_region_match(str(c.get("name") or ""), country)]
@@ -374,6 +407,9 @@ def _nex_candidates(country: str) -> list:
             break
 
     if not found:
+        if _nex_type_strict():
+            raise ProviderError("『%s』%s当前无库存（严格卡类型：不会自动换成其它卡类型）"
+                                % (project, _type_name(preferred_type) or ("type %s" % preferred_type)))
         raise ProviderError("NexSMS 优选未找到『%s』项目，请检查 API Key 或项目关键词" % project)
     found.sort(key=lambda x: (x["quantity"] > 0, x["region_ok"], x["type"] == preferred_type,
                               x.get("success") or 0, x["quantity"]), reverse=True)
@@ -913,14 +949,15 @@ def _nex_store_items(items, country: str, card_id: int, app: dict) -> list:
             allocated = bool(card_id) and idx == 0
             note = "NexSMS 优选 | %s | %s" % (item.get("appName") or app.get("name") or "豆包",
                                                 app.get("cate_name") or "")
+            card_type = _type_name(item.get("type") or app.get("type"))
             cur = c.execute(
-                "INSERT INTO numbers(phone,country,provider,sms_url,ext_id,status,card_id,allocated_at,price,note,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO numbers(phone,country,provider,sms_url,ext_id,status,card_id,allocated_at,price,note,card_type,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (phone, actual, "nexsms_premium", sms_url,
                  str(access.get("accessId") or app["appId"]),
                  "allocated" if allocated else "available",
                  card_id if allocated else 0, now if allocated else 0,
-                 float(app.get("price") or 0), note, now))
+                 float(app.get("price") or 0), note, card_type, now))
             out.append(dict(c.execute("SELECT * FROM numbers WHERE id=?", (cur.lastrowid,)).fetchone()))
     return out
 

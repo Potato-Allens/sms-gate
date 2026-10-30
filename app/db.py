@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS numbers(
   used_at INTEGER DEFAULT 0,
   note TEXT DEFAULT '',
   price REAL DEFAULT 0,
+  card_type TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_numbers_pick ON numbers(status, country, id);
@@ -212,6 +213,101 @@ CREATE TABLE IF NOT EXISTS rl(
 CREATE INDEX IF NOT EXISTS ix_cards_prefix ON cards(key_prefix);
 CREATE INDEX IF NOT EXISTS ix_redemptions_created ON redemptions(created_at);
 CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts);
+
+-- ============================ 号码商城 ============================
+CREATE TABLE IF NOT EXISTS shop_users(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  pass_hash TEXT NOT NULL,
+  balance_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER DEFAULT 0,
+  last_ip TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS shop_sessions(
+  sid TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  csrf TEXT NOT NULL,
+  ip TEXT DEFAULT '',
+  ua TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_shop_sess_user ON shop_sessions(user_id);
+CREATE TABLE IF NOT EXISTS shop_products(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id INTEGER NOT NULL,
+  ptype INTEGER NOT NULL DEFAULT 1,
+  name TEXT NOT NULL,
+  icon TEXT DEFAULT '',
+  cate_id INTEGER DEFAULT 0,
+  cate_name TEXT DEFAULT '',
+  country TEXT DEFAULT 'us',
+  card_type TEXT DEFAULT '',
+  upstream_price_usd REAL DEFAULT 0,
+  success REAL DEFAULT 0,
+  stock INTEGER DEFAULT 0,
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  note TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_shop_prod_key ON shop_products(app_id, ptype);
+CREATE INDEX IF NOT EXISTS ix_shop_prod_on ON shop_products(enabled, sort DESC, id);
+CREATE TABLE IF NOT EXISTS shop_orders(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  app_id INTEGER DEFAULT 0,
+  app_name TEXT DEFAULT '',
+  country TEXT DEFAULT '',
+  card_type TEXT DEFAULT '',
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  relay_card_id INTEGER DEFAULT 0,
+  relay_token TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  link TEXT DEFAULT '',
+  idem TEXT DEFAULT '',
+  error TEXT DEFAULT '',
+  ip TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  done_at INTEGER DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_shop_order_idem ON shop_orders(user_id, idem);
+CREATE INDEX IF NOT EXISTS ix_shop_order_user ON shop_orders(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_shop_order_time ON shop_orders(created_at);
+CREATE TABLE IF NOT EXISTS shop_rcodes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code_hash TEXT UNIQUE NOT NULL,
+  code_prefix TEXT DEFAULT '',
+  amount_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  batch TEXT DEFAULT '',
+  created_by TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  used_by INTEGER DEFAULT 0,
+  used_at INTEGER DEFAULT 0,
+  expires_at INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_shop_rcode_batch ON shop_rcodes(batch, id);
+CREATE INDEX IF NOT EXISTS ix_shop_rcode_status ON shop_rcodes(status, id);
+CREATE TABLE IF NOT EXISTS shop_ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  delta_cents INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_shop_ledger_user ON shop_ledger(user_id, id DESC);
 """
 
 DEFAULTS = {
@@ -230,6 +326,7 @@ DEFAULTS = {
     "nexsms_project": "豆包",
     "nexsms_sms_prefix": "[豆包]",
     "nexsms_type": "1",
+    "nexsms_type_strict": "1",
     "nexsms_expiry": "0",
     "nexsms_prefix": "",
     "nexsms_app_id": "",
@@ -262,6 +359,17 @@ DEFAULTS = {
     "auto_ban_enabled": "1",
     "admin_ip_allow": "",
     "exit_grace_sec": "8",
+    "shop_on": "1",
+    "shop_register_on": "1",
+    "shop_usd_cny": "7.20",
+    "shop_markup_pct": "40",
+    "shop_allow_oos": "0",
+    "shop_order_days": "0",
+    "shop_buy_per_hour": "20",
+    "shop_min_recharge": "1000",
+    "shop_sync_cates": "",
+    "shop_sync_pages": "1",
+    "shop_max_orders_per_user": "3",
 }
 
 
@@ -296,6 +404,8 @@ def init() -> None:
 
         _addcol('admin_sessions', 'stage', "TEXT NOT NULL DEFAULT 'active'")
         _addcol('numbers', 'choice', "TEXT NOT NULL DEFAULT ''")
+        _addcol('numbers', 'card_type', "TEXT NOT NULL DEFAULT ''")
+        _addcol('relay_cards', 'card_type', "TEXT NOT NULL DEFAULT ''")
         _addcol('nex_queue', 'choice', "TEXT NOT NULL DEFAULT ''")
         _addcol('nex_queue', 'provider', "TEXT NOT NULL DEFAULT ''")
         _addcol('nex_queue', 'card_type', "TEXT NOT NULL DEFAULT ''")

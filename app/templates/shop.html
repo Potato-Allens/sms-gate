@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070b14">
+<title>{{ site_name }} · 号码商城</title>
+<meta name="description" content="按平台选购接码号码：显示成功率与实时价格，下单即发直链卡密，接收验证码即刻可用。">
+<link rel="stylesheet" href="/static/style.css?v=20261024i">
+<link rel="stylesheet" href="/static/landing.css?v=20261024i">
+<link rel="stylesheet" href="/static/shop.css?v=20261030a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1220'/%3E%3Cpath d='M18 34l9 9 19-22' stroke='%2334e0b0' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body class="pub lp sh" data-page="shop" data-off="{{ '1' if shop_off else '0' }}">
+<div class="aurora a1"></div><div class="aurora a2"></div>
+<div class="grid-bg"></div>
+
+<header class="topbar lp-nav">
+  <a class="brand" href="/">
+    <span class="logo-mark"></span>
+    <span class="brand-name">{{ site_name }}</span>
+    <span class="brand-tag">SHOP</span>
+  </a>
+  <nav class="lp-links">
+    <a href="/shop">号码商城</a>
+    <a href="/shop/me">个人中心</a>
+    <a href="/redeem">卡密入口</a>
+    <a href="/">官网</a>
+  </nav>
+  <div class="lp-nav-cta" id="navUser">
+    <a class="btn ghost sm" href="/shop/login">登录</a>
+    <a class="btn primary sm" href="/shop/login#reg">注册</a>
+  </div>
+</header>
+
+<main class="sh-main">
+
+  <section class="sh-hero">
+    <div>
+      <span class="lp-badge"><i class="lp-dot"></i> 直链卡密 · 下单即发货 · 一单一号</span>
+      <h1>号码商城<br><span class="lp-grad">按平台选号，成功率看得见</span></h1>
+      <p class="lp-lead">
+        选择运营商与卡类型，按平台下单。付款后立刻拿到
+        <code>卡号:手机号----接码地址</code> 直链卡密，打开即可持续接收该号码的验证码，不限次数刷新。
+      </p>
+    </div>
+    <aside class="sh-wallet" id="walletCard">
+      <div class="wl">账户余额</div>
+      <div class="wv"><small>¥</small><span id="walletVal">—</span></div>
+      <div class="wn" id="walletNote">登录后即可充值下单</div>
+      <div class="wa">
+        <a class="btn ghost" href="/shop/login" id="walletLogin">登录 / 注册</a>
+        <a class="btn primary" href="/shop/me" id="walletMe" style="display:none">个人中心</a>
+      </div>
+    </aside>
+  </section>
+
+  {% if shop_off %}<div class="sh-notice">商城正在维护，暂时无法下单。已购买的卡密仍可正常使用。</div>{% endif %}
+
+  <section class="sh-filterbar">
+    <div class="sh-frow">
+      <span class="sh-flabel">运营商</span>
+      <div class="sh-chips" id="regionChips"></div>
+    </div>
+    <div class="sh-frow">
+      <span class="sh-flabel">卡类型</span>
+      <div class="sh-chips" id="typeChips"></div>
+      <div class="sh-search" style="min-width:220px">
+        <input id="shQ" type="search" placeholder="搜索平台，例如 WhatsApp / Telegram" autocomplete="off">
+      </div>
+    </div>
+  </section>
+
+  <div class="sh-stat">
+    <span>共 <b id="statCount">0</b> 个平台在售</span>
+    <span>·</span>
+    <span>价格含服务费，按 <b>人民币</b> 结算</span>
+    <span>·</span>
+    <span id="statHint">下单后可在「个人中心」随时查看接码地址</span>
+  </div>
+
+  <div class="sh-grid" id="prodGrid"><div class="sh-empty">加载中…</div></div>
+
+  <p class="sh-foot">请仅用于本人拥有或已获得授权的账号验证 · © {{ year }} {{ site_name }}</p>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/shop.js?v=20261030a"></script>
+</body>
+</html>

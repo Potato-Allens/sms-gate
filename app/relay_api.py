@@ -256,9 +256,10 @@ def _create_sync(items, note: str, days: int, actor: str):
             expires = now + days * 86400 if days else 0
             cur2 = c.execute(
                 "INSERT INTO relay_cards(token,phone,country,upstream_enc,note,status,batch_id,"
-                "created_at,created_by,expires_at) VALUES(?,?,?,?,?,'active',?,?,?,?)",
+                "created_at,created_by,expires_at,card_type) VALUES(?,?,?,?,?,'active',?,?,?,?,?)",
                 (token, it["phone"], it.get("country", ""), security.enc(it["upstream"]),
-                 (it.get("note") or note)[:120], bid, now, actor, expires))
+                 (it.get("note") or note)[:120], bid, now, actor, expires,
+                 (it.get("card_type") or "")[:16]))
             out.append({"id": cur2.lastrowid, "phone": it["phone"], "token": token,
                         "expires_at": expires, "line": _line(it["phone"], token)})
     return batch_no, out
@@ -359,7 +360,8 @@ def _alloc_one(choice: str, info: dict, prov: str, seq: int) -> dict:
         num = providers.allocate(info.get("country") or choice, 0)
         upstream = (num.get("sms_url") or "").strip()
     return {"number_id": int(num["id"]), "phone": _phone(num.get("phone") or "") or num.get("phone") or "",
-            "upstream": upstream, "country": num.get("country") or ""}
+            "upstream": upstream, "country": num.get("country") or "",
+            "card_type": num.get("card_type") or ""}
 
 
 def _allocate_sync(choice: str, count: int):
@@ -415,7 +417,8 @@ async def relay_allocate(request: Request):
         return err("取号失败：" + why, 429 if "补货" in why or "余额" in why else 502, bad=bad)
     batch_no, rows = await run_in_threadpool(
         _create_sync, [{"phone": it["phone"], "upstream": it["upstream"],
-                        "country": it["country"], "note": note} for it in items],
+                        "country": it["country"], "note": note,
+                        "card_type": it.get("card_type") or ""} for it in items],
         note, days, s["username"])
     with db.tx() as c:
         for it in items:
@@ -458,7 +461,7 @@ def relay_list(request: Request, status: str = "", q: str = "", page: int = 1, s
             "token_prefix": r["token"][:8] + "…", "status": r["status"],
             "reads": r["reads"], "last_read_at": r["last_read_at"], "last_ip": r["last_ip"],
             "created_at": r["created_at"], "expires_at": r["expires_at"],
-            "note": r["note"],
+            "note": r["note"], "card_type": r["card_type"],
             "upstream_host": ("d1jiema" if up.startswith("d1jiema:") else (urlparse(up).hostname or "—")) if up else "—",
             "line": _line(r["phone"], r["token"]),
         })

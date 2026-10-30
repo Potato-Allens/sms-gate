@@ -8,12 +8,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from . import config, db, nexq, providers, public_api, admin_api, relay_api, security
+from . import config, db, nexq, providers, public_api, admin_api, relay_api, security, shop
 
 app = FastAPI(title="SMS Gate", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(public_api.router)
 app.include_router(admin_api.router, prefix="/admin")
 app.include_router(relay_api.router)
+app.include_router(shop.router)
+app.include_router(shop.admin_router, prefix="/admin")
 
 env = Environment(loader=FileSystemLoader(str(config.TEMPLATE_DIR)),
                   autoescape=select_autoescape(["html", "xml"]))
@@ -94,7 +96,7 @@ async def guard(request: Request, call_next):
         until, reason = security.blocked_until(ip)
         if until and until > time.time():
             security.audit("blocked_hit", "warn", ip=ip, detail={"path": path, "reason": reason})
-            if path.startswith("/api/") or path.startswith("/admin/api/"):
+            if path.startswith(("/api/", "/admin/api/", "/shop/api/")):
                 return JSONResponse({"ok": False, "error": "IP 已被临时封禁", "blocked": True}, status_code=403)
             return PlainTextResponse("403 Forbidden - IP temporarily blocked", status_code=403)
         allowed, retry = security.hit("global:%s" % ip, 600, 60)
@@ -105,7 +107,7 @@ async def guard(request: Request, call_next):
     response = await call_next(request)
     for k, v in SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
-    if path.startswith("/api/") or path.startswith("/admin/api/"):
+    if path.startswith(("/api/", "/admin/api/", "/shop/api/")):
         # Codes, tickets and session payloads must never sit in a cache.
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
         response.headers["Pragma"] = "no-cache"
@@ -119,7 +121,8 @@ async def guard(request: Request, call_next):
 async def unhandled(request: Request, exc: Exception):
     security.audit("unhandled_error", "error", ip=security.client_ip(request),
                    detail="%s: %s" % (type(exc).__name__, str(exc)[:200]))
-    if request.url.path.startswith("/api") or request.url.path.startswith("/admin/api"):
+    if (request.url.path.startswith("/api") or request.url.path.startswith("/admin/api")
+            or request.url.path.startswith("/shop/api")):
         return JSONResponse({"ok": False, "error": "服务异常，请稍后重试"}, status_code=500)
     return PlainTextResponse("500 Internal Server Error", status_code=500)
 
@@ -151,6 +154,22 @@ def redeem_page(request: Request):
 @app.get("/c/{key}", response_class=HTMLResponse)
 def card_link(key: str, request: Request):
     return render("public.html", request, card_key=key)
+
+
+@app.get("/shop", response_class=HTMLResponse)
+def shop_page(request: Request):
+    """号码商城：平台列表 / 运营商 / 卡类型 / 定价下单。"""
+    return render("shop.html", request, shop_off=db.get_setting("shop_on", "1") != "1")
+
+
+@app.get("/shop/login", response_class=HTMLResponse)
+def shop_login_page(request: Request):
+    return render("shop_login.html", request)
+
+
+@app.get("/shop/me", response_class=HTMLResponse)
+def shop_me_page(request: Request):
+    return render("shop_me.html", request)
 
 
 @app.get("/admin", response_class=HTMLResponse)

@@ -794,7 +794,7 @@ ALLOWED = {
     "site_name", "site_url", "site_note", "provider", "poll_interval", "number_ttl_min",
     "max_numbers_per_card", "max_alloc_attempts", "sms_activate_key", "sms_activate_service", "fivesim_key",
     "fivesim_product", "fivesim_operator", "allow_countries", "auto_ban_enabled",
-    "nexsms_key", "nexsms_base", "nexsms_project", "nexsms_sms_prefix", "nexsms_type",
+    "nexsms_key", "nexsms_base", "nexsms_project", "nexsms_sms_prefix", "nexsms_type", "nexsms_type_strict",
     "nexsms_expiry", "nexsms_prefix", "nexsms_app_id", "nexsms_batch_qty",
     "nexsms_stock_target", "nexsms_pool_ttl_min", "nexsms_buy_wait_sec",
     "nexsms_queue_concurrency", "nexsms_queue_max", "nexsms_queue_timeout_sec",

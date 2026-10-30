@@ -21,6 +21,8 @@ CARD_COOKIE = "sg_card"
 ADMIN_COOKIE = "sg_admin"
 CARD_SESSION_TTL = int(os.environ.get("SMSGATE_CARD_TTL", str(2 * 3600)))
 ADMIN_SESSION_TTL = int(os.environ.get("SMSGATE_ADMIN_TTL", str(8 * 3600)))
+SHOP_COOKIE = "sg_shop"
+SHOP_SESSION_TTL = int(os.environ.get("SMSGATE_SHOP_TTL", str(7 * 86400)))
 TRUSTED_PROXY = os.environ.get("SMSGATE_TRUST_PROXY", "127.0.0.1")
 
 POLL_INTERVAL = int(os.environ.get("SMSGATE_POLL_INTERVAL", "15"))

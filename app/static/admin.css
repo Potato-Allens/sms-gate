@@ -165,3 +165,16 @@ td.mono,th.mono{font-family:var(--mono);font-size:11.5px}
 select[multiple]{background:#080e18;color:#dfe8f8;padding:5px;min-height:76px}
 select[multiple] option{background:#0d1422;color:#cfd9ec;padding:5px 7px}
 select[multiple] option:checked{background:#17453b;color:#9cf5db}
+
+/* shop helpers */
+.row{display:flex;align-items:center}
+.gap10{gap:10px}
+.wrap{flex-wrap:wrap}
+.row input,.row select{background:#080d18;border:1px solid rgba(255,255,255,.14);color:var(--text);
+  border-radius:9px;padding:9px 11px;font-family:inherit;font-size:12.5px;outline:none}
+.row input:focus,.row select:focus{border-color:#35e0b077}
+.shop-price{background:#080d18;border:1px solid rgba(255,255,255,.14);color:#eaf6ff;
+  border-radius:8px;padding:7px 9px;font-family:var(--mono);font-size:12.5px;outline:none}
+
+.row select{min-width:132px}
+.row input[type=number]{min-width:96px}

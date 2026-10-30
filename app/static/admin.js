@@ -112,6 +112,10 @@
     audit: ["安全审计", "全量操作与安全事件"],
     ips: ["IP 管理", "访问统计、封禁与限流"],
     settings: ["系统设置", "号源、策略与站点信息"],
+    shop: ["号码商城", "平台定价、上架与同步"],
+    shoporders: ["商城订单", "直链卡发货与退款"],
+    rcodes: ["充值码", "批量生成与核销情况"],
+    shopusers: ["商城用户", "余额、状态与消费"],
   };
 
   function route() {
@@ -122,7 +126,8 @@
     $("pageTitle").textContent = TITLES[r][0];
     $("pageSub").textContent = TITLES[r][1];
     ({ dashboard: pageDashboard, cards: pageCards, relay: pageRelay, numbers: pageNumbers, redemptions: pageRedemptions,
-       codes: pageCodes, usage: pageUsage, audit: pageAudit, ips: pageIps, settings: pageSettings })[r]();
+       codes: pageCodes, usage: pageUsage, audit: pageAudit, ips: pageIps, settings: pageSettings,
+       shop: pageShop, shoporders: pageShopOrders, rcodes: pageRcodes, shopusers: pageShopUsers })[r]();
   }
 
   function closeModal() {
@@ -142,6 +147,9 @@
     if (!el) return;
     const act = el.dataset.act;
     if (act === "copy") { copy(el.dataset.text || ""); return; }
+    if (/^(shop-|ord-|rc-|u-)/.test(act) || act === "copy-all-codes" || act === "dl-codes") {
+      shopAction(act, el); return;
+    }
     if (act === "page") { goPage(el.dataset.page); return; }
     if (act === "card-action") { cardAction(el.dataset.id, el.dataset.op); return; }
     if (act === "num-action") { numAction(el.dataset.id, el.dataset.op); return; }
@@ -161,6 +169,7 @@
     }
     if (act === "relay-batch-copy") { relayBatchExport("copy"); return; }
     if (act === "relay-batch-download") { relayBatchExport("download"); return; }
+    if (act === "relay-batch-preview") { relayBatchPreview(); return; }
   }
 
   function onSubmit(e) {
@@ -336,6 +345,14 @@
     const cfg = await api("/admin/api/settings");
     if (cfg.ok && cfg.settings && cfg.settings.relay_base) base = cfg.settings.relay_base;
     content.innerHTML =
+      '<div class="card" id="relayRecent"><div class="card-title"><h3>最近批次 · 找回</h3>' +
+      '<span class="hint">忘记复制也不丢 · 任何一批都能重新导出</span></div>' +
+      '<div class="toolbar"><select id="relayBatch" style="min-width:360px"></select>' +
+      '<button class="btn primary" data-act="relay-batch-copy">复制这一批</button>' +
+      '<button class="btn" data-act="relay-batch-download">下载 txt</button>' +
+      '<button class="btn" data-act="relay-batch-preview">查看明细</button>' +
+      '<span class="hint" id="relayBatchHint">加载中…</span></div>' +
+      '<div class="mt12" id="relayBatchPreview"></div></div>' +
       '<div class="card"><div class="card-title"><h3>生成号码直链卡</h3><span class="hint">系统自动购买号码 · 可反复取码</span></div>' +
       '<form id="relayAllocForm" class="form-grid">' +
       '<label class="fld">号段<select name="choice">' + opt("us", "美国实卡") + opt("gb", "英国") +
@@ -360,12 +377,7 @@
       '<label class="fld">数量<input name="count" type="number" min="1" max="200" value="10"></label>' +
       '<label class="fld">地区<select name="country"><option value="">全部</option><option value="us">美国</option><option value="gb">英国</option><option value="hk">香港</option><option value="cn">中国</option></select></label>' +
       '<div class="full"><button class="btn" type="submit">从号池生成</button></div></form></div>' +
-      '<div class="card"><div class="card-title"><h3>批次导出</h3><span class="hint">弹窗关掉也不丢 · 任何一批都能重新拿回链接</span></div>' +
-      '<div class="toolbar"><select id="relayBatch" style="min-width:340px"></select>' +
-      '<button class="btn" data-act="relay-batch-copy">复制这一批</button>' +
-      '<button class="btn" data-act="relay-batch-download">下载 txt</button>' +
-      '<span class="hint" id="relayBatchHint">加载中…</span></div></div>' +
-      '<div class="card"><div class="toolbar">' +
+            '<div class="card"><div class="toolbar">' +
       '<select id="relayStatus">' + opt("all", "全部状态", st.status) + opt("active", "可用") +
       opt("disabled", "已禁用") + opt("expired", "已过期") + "</select>" +
       '<input id="relayQ" placeholder="搜索手机号 / 备注 / token" style="min-width:240px" value="' + esc(st.q) + '">' +
@@ -386,14 +398,34 @@
     const d = await api("/admin/api/relay/batches");
     if (!d.ok) { const h = $("relayBatchHint"); if (h) h.textContent = "批次列表加载失败"; return; }
     const items = d.items || [];
+    const last = localStorage.getItem("relay_last_batch") || "";
     sel.innerHTML = items.length ? items.map((b) =>
-      '<option value="' + b.id + '">' + esc(b.batch_no) + " · " + b.live + " 条 · " + fmt(b.created_at) +
-      (b.note ? " · " + esc(b.note) : "") + "</option>").join("") : '<option value="">暂无批次</option>';
+      '<option value="' + b.id + '">' + (String(b.id) === last ? "★ 刚生成 · " : "") + esc(b.batch_no) +
+      " · " + b.live + " 条 · " + fmt(b.created_at) + (b.note ? " · " + esc(b.note) : "") + "</option>").join("")
+      : '<option value="">暂无批次</option>';
     const want = keep == null ? sel.value : String(keep);
     if (want && Array.from(sel.options).some((o) => o.value === want)) sel.value = want;
     const cur = items.find((b) => String(b.id) === sel.value);
     const hint = $("relayBatchHint");
     if (hint) hint.textContent = cur ? ("当前这批 " + cur.live + " 条，共 " + items.length + " 批") : "暂无批次";
+  }
+
+  async function relayBatchPreview() {
+    const sel = $("relayBatch");
+    const box = $("relayBatchPreview");
+    const id = sel ? sel.value : "";
+    if (!box) return;
+    if (!id) { box.innerHTML = '<div class="empty">还没有可找回的批次</div>'; return; }
+    box.innerHTML = '<div class="loading">加载中…</div>';
+    const d = await api("/admin/api/relay/export?batch=" + encodeURIComponent(id));
+    if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error || "加载失败") + "</div>"; return; }
+    const lines = String(d.text || "").split("\n").filter(Boolean);
+    if (!lines.length) { box.innerHTML = '<div class="empty">这一批的卡已经全部删除了</div>'; return; }
+    const all = lines.join("\n");
+    box.innerHTML = '<textarea readonly style="width:100%;height:150px" spellcheck="false">' + esc(all) + "</textarea>" +
+      '<div class="toolbar mt12"><button class="btn mini" data-act="copy" data-text="' + esc(all) + '">复制全部（' +
+      lines.length + " 条）</button><button class=\"btn mini\" data-act=\"relay-batch-download\">下载 txt</button>" +
+      '<span class="hint">关掉这个页面也能随时回来找回</span></div>';
   }
 
   async function relayBatchExport(mode) {
@@ -421,7 +453,9 @@
       let cls = "ok", txt = "可用";
       if (c.status === "disabled") { cls = "bad"; txt = "已禁用"; }
       else if (c.expires_at && c.expires_at < now) { cls = "bad"; txt = "已过期"; }
+      const tcls = c.card_type === "续费卡" ? "bad" : (c.card_type === "首次卡" ? "ok" : "warn");
       return "<tr><td class='mono'>#" + c.id + "</td><td class='mono'>" + esc(c.phone || "—") +
+        "</td><td>" + (c.card_type ? badge(c.card_type, tcls) : '<span class="hint">—</span>') +
         "</td><td class='mono'>" + esc(c.token_prefix || "—") + "</td><td>" + badge(txt, cls) +
         "</td><td class='mono'>" + (c.reads || 0) + "</td><td class='mono'>" +
         (c.last_read_at ? fmt(c.last_read_at) : "—") + "</td><td class='mono'>" +
@@ -435,17 +469,18 @@
         '<button class="btn mini" data-act="relay-action" data-op="reset" data-id="' + c.id + '">重置</button> ' +
         '<button class="btn mini danger" data-act="relay-action" data-op="delete" data-id="' + c.id + '">删除</button></td></tr>';
     }).join("");
-    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>手机号</th><th>Token</th><th>状态</th>' +
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>手机号</th><th>类型</th><th>Token</th><th>状态</th>' +
       "<th>读取</th><th>最近读取</th><th>最近 IP</th><th>上游</th><th>备注</th><th>有效期</th><th>操作</th></tr></thead><tbody>" +
-      (rows || "<tr><td colspan=11 class='empty'>暂无直链卡</td></tr>") + "</tbody></table></div>" + pager(d.total, st.page, 50);
+      (rows || "<tr><td colspan=12 class='empty'>暂无直链卡</td></tr>") + "</tbody></table></div>" + pager(d.total, st.page, 50);
   }
 
   function relayResult(d) {
     const all = (d.lines || []).join("\n");
     S.lastRelay = { batch: d.batch || "", lines: all, count: d.count || 0 };
+    try { if (all) setTimeout(() => copy(all), 150); } catch (e) {}
     openModal("已生成 " + d.count + " 条直链卡" + (d.batch ? " · " + d.batch : ""),
       '<div class="ok-box">买家拿到的是你自己的域名，上游地址只保存在服务器；同一链接可一直取码，除非禁用或过期。' +
-      '<br>关掉这个窗口也不会丢：直链卡页顶部「批次导出」可以随时把这一批重新导出来。</div>' +
+      '<br>已自动复制到剪贴板；就算关掉这个窗口也不丢 —— 直链卡页顶部「最近批次 · 找回」可以随时把这一批重新导出来。</div>' +
       '<div class="mt12"><textarea id="allLinks" style="width:100%;height:150px" readonly>' + esc(all) + "</textarea>" +
       '<button class="btn mini mt12" data-act="copy-all">复制全部（' + (d.count || 0) + " 条）</button> " +
       '<button class="btn mini mt12" id="relayDownload">下载 txt</button> ' +
@@ -454,7 +489,10 @@
         esc(d.bad.map((x) => (x.line ? "第" + x.line + "行 " : (x.phone || "") + " ") + x.why).join("；")) + "</div>" : ""), true);
     const dl = $("relayDownload");
     if (dl) dl.addEventListener("click", () => downloadText("relay-cards.txt", all));
-    loadRelayBatches();
+    loadRelayBatches().then(() => {
+      const sel = $("relayBatch");
+      if (sel && sel.value) localStorage.setItem("relay_last_batch", sel.value);
+    });
   }
 
   async function allocateRelay() {
@@ -586,8 +624,10 @@
       const map = { available: ["ok", "可用"], allocated: ["info", "已分配"], used: ["warn", "已接码"],
         expired: ["bad", "已超时"], disabled: ["bad", "已禁用"] };
       const m = map[n.status] || ["", n.status];
+      const tcls = n.card_type === "续费卡" ? "bad" : (n.card_type === "首次卡" ? "ok" : "warn");
       return "<tr><td class='mono'>#" + n.id + "</td><td class='mono'>" + esc(n.phone) + "</td><td>" +
         (n.country === "us" ? "美国" : n.country === "gb" ? "英国" : "香港") + "</td><td>" +
+        (n.card_type ? badge(n.card_type, tcls) : '<span class="hint">—</span>') + "</td><td>" +
         badge(m[1], m[0]) + "</td><td class='mono'>" + esc(n.provider) + "</td><td class='mono'>" +
         (n.card_id ? "#" + n.card_id : "—") + "</td><td class='mono'>" + (n.codes || 0) + "</td><td class='mono'>" +
         (n.allocated_at ? fmt(n.allocated_at) : "—") + "</td><td>" +
@@ -596,8 +636,8 @@
           : '<button class="btn mini" data-act="num-action" data-op="disable" data-id="' + n.id + '">禁用</button> ') +
         '<button class="btn mini danger" data-act="num-action" data-op="delete" data-id="' + n.id + '">删除</button></td></tr>';
     }).join("");
-    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>号码</th><th>地区</th><th>状态</th><th>号源</th><th>绑定卡密</th><th>接码数</th><th>分配时间</th><th>操作</th></tr></thead><tbody>' +
-      (rows || "<tr><td colspan=9 class='empty'>号码池为空，请先导入</td></tr>") + "</tbody></table></div>" + pager(d.total, st.page, 50);
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>号码</th><th>地区</th><th>类型</th><th>状态</th><th>号源</th><th>绑定卡密</th><th>接码数</th><th>分配时间</th><th>操作</th></tr></thead><tbody>' +
+      (rows || "<tr><td colspan=10 class='empty'>号码池为空，请先导入</td></tr>") + "</tbody></table></div>" + pager(d.total, st.page, 50);
   }
 
   async function numAction(id, op) {
@@ -850,6 +890,7 @@
       '<label class="fld">项目关键词<input name="nexsms_project" value="' + esc(s.nexsms_project || "豆包") + '" placeholder="豆包"></label>' +
       '<label class="fld">短信前缀（只收以此开头的）<input name="nexsms_sms_prefix" value="' + esc(s.nexsms_sms_prefix || "[豆包]") + '" placeholder="[豆包]"></label>' +
       '<label class="fld">卡类型<select name="nexsms_type">' + opt("1", "1 · 首次卡", s.nexsms_type) + opt("2", "2 · 重启卡", s.nexsms_type) + opt("3", "3 · 续费卡", s.nexsms_type) + "</select></label>" +
+      '<label class="fld">卡类型严格模式<select name="nexsms_type_strict">' + opt("1", "开启 · 缺货就报缺货（推荐）", s.nexsms_type_strict) + opt("0", "关闭 · 缺货时自动换其它类型", s.nexsms_type_strict) + "</select></label>" +
       '<label class="fld">有效期档位<select name="nexsms_expiry">' + [["0","0 · 随机 / 默认"],["1","1 · 5-30 天"],["2","2 · 30-45 天"],["3","3 · 45-60 天"],["4","4 · 60-80 天"],["5","5 · 80-90 天"],["6","6 · 90 天以上"]].map(function (x) { return opt(x[0], x[1], s.nexsms_expiry); }).join("") + "</select></label>" +
       '<label class="fld">号码前缀（可空）<input name="nexsms_prefix" value="' + esc(s.nexsms_prefix || "") + '"></label>' +
       '<label class="fld">手动 appId（可空）<input name="nexsms_app_id" value="' + esc(s.nexsms_app_id || "") + '" placeholder="留空自动搜索项目"></label>' +
@@ -901,7 +942,8 @@
       fivesim_operator: f.fivesim_operator.value,
       nexsms_key: f.nexsms_key.value, nexsms_base: f.nexsms_base.value,
       nexsms_project: f.nexsms_project.value, nexsms_sms_prefix: f.nexsms_sms_prefix.value,
-      nexsms_type: f.nexsms_type.value, nexsms_expiry: f.nexsms_expiry.value,
+      nexsms_type: f.nexsms_type.value, nexsms_type_strict: f.nexsms_type_strict.value,
+      nexsms_expiry: f.nexsms_expiry.value,
       nexsms_prefix: f.nexsms_prefix.value, nexsms_app_id: f.nexsms_app_id.value,
       nexsms_batch_qty: f.nexsms_batch_qty.value, nexsms_stock_target: f.nexsms_stock_target.value,
       nexsms_cooldown_sec: f.nexsms_cooldown_sec.value, nexsms_proxy: f.nexsms_proxy.value,
@@ -971,7 +1013,391 @@
     else if (S.route === "usage") loadUsage();
     else if (S.route === "audit") loadAudit();
     else if (S.route === "ips") loadIps();
+    else if (S.route === "shop") loadShopProducts();
+    else if (S.route === "shoporders") loadShopOrders();
+    else if (S.route === "rcodes") loadRcodes();
+    else if (S.route === "shopusers") loadShopUsers();
   }
 
+  /* ============================================================ 号码商城 */
+  function yuan(cents) { return (Number(cents || 0) / 100).toFixed(2); }
+
+  async function pageShop() {
+    const st = S.pageState.shop = S.pageState.shop || { q: "", status: "all", page: 1 };
+    content.innerHTML = '<div class="loading">加载中…</div>';
+    const ov = await api("/admin/api/shop/overview");
+    const cf = await api("/admin/api/shop/settings");
+    if (!ov.ok) { content.innerHTML = '<div class="empty">' + esc(ov.error) + "</div>"; return; }
+    const s = cf.settings || {};
+    const on = (v) => (String(v) === "1" ? " selected" : "");
+    content.innerHTML =
+      '<div class="stats">' +
+      stat("注册用户", ov.users, "今日新增 " + ov.users_today, "b") +
+      stat("账户余额合计", "¥" + yuan(ov.balance_total), "待消费余额", "w") +
+      stat("成交金额", "¥" + yuan(ov.revenue), "今日 ¥" + yuan(ov.revenue_today), "g") +
+      stat("商城订单", ov.orders, "今日 " + ov.orders_today, "b") +
+      stat("在售平台", ov.products_on + " / " + ov.products, "开通 / 总数", "g") +
+      stat("充值码", ov.rcodes_active + " / " + ov.rcodes, "可用 / 总数", "w") +
+      "</div>" +
+
+      '<form id="shopCfgForm" class="card mt18">' +
+      '<div class="card-title"><h3>商城设置</h3><span class="hint">人民币定价结算，美元单价仅作参考</span></div>' +
+      '<div class="form-grid">' +
+      '<label class="fld">商城开关<select name="shop_on"><option value="1"' + on(s.shop_on || "1") + ">营业中</option><option value=\"0\"" + on(s.shop_on === "0" ? "0" : "x") + ">维护中（前端只读）</option></select></label>" +
+      '<label class="fld">开放注册<select name="shop_register_on"><option value="1"' + on(s.shop_register_on || "1") + ">允许</option><option value=\"0\"" + on(s.shop_register_on === "0" ? "0" : "x") + ">关闭</option></select></label>" +
+      '<label class="fld">美元汇率（1 USD = ? CNY）<input name="shop_usd_cny" value="' + esc(s.shop_usd_cny || "7.20") + '"></label>' +
+      '<label class="fld">同步默认加价（%）<input name="shop_markup_pct" value="' + esc(s.shop_markup_pct || "40") + '"></label>' +
+      '<label class="fld">允许缺货下单<select name="shop_allow_oos"><option value="0"' + on(s.shop_allow_oos === "1" ? "x" : "0") + ">不允许（推荐）</option><option value=\"1\"" + on(s.shop_allow_oos) + ">允许</option></select></label>" +
+      '<label class="fld">卡密有效期（天，0=永久）<input name="shop_order_days" value="' + esc(s.shop_order_days || "0") + '"></label>' +
+      '<label class="fld">每人每小时下单上限<input name="shop_buy_per_hour" value="' + esc(s.shop_buy_per_hour || "20") + '"></label>' +
+      '<label class="fld">同步每个分类页数<input name="shop_sync_pages" value="' + esc(s.shop_sync_pages || "1") + '"></label>' +
+      '<label class="fld full">只同步这些分类（留空=全部；可填分类 ID 或名称，逗号分隔）<input name="shop_sync_cates" value="' + esc(s.shop_sync_cates || "") + '" placeholder="例如 美国(实卡),英国卡"></label>' +
+      '<div class="fld full"><button class="btn primary" type="submit">保存设置</button></div>' +
+      "</div></form>" +
+
+      '<div class="card mt18">' +
+      '<div class="card-title"><h3>平台同步</h3><span class="hint">只收录上游「有成功率」的平台，已有商品保留你的定价与开关</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<button class="btn" type="button" data-act="shop-sync">立即同步平台列表</button>' +
+      '<span class="help" id="syncStat">未开始</span></div>' +
+      '<form id="shopAddForm" class="form-grid mt12">' +
+      '<label class="fld">appId<input name="app_id" placeholder="709"></label>' +
+      '<label class="fld">平台名称<input name="name" placeholder="WhatsApp"></label>' +
+      '<label class="fld">分类（运营商）<input name="cate_name" placeholder="美国(实卡)"></label>' +
+      '<label class="fld">卡类型<select name="ptype"><option value="1">首次卡</option><option value="2">重启卡</option><option value="3">续费卡</option></select></label>' +
+      '<label class="fld">售价（元）<input name="price_yuan" placeholder="12.00"></label>' +
+      '<div class="fld"><button class="btn ghost" type="submit">手动添加商品</button></div>' +
+      "</form></div>" +
+
+      '<div class="card mt18">' +
+      '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价（元）为唯一结算口径</span></div>' +
+      '<div class="row gap10 wrap mt8">' +
+      '<input id="shopQ" placeholder="搜索平台 / 分类" value="' + esc(st.q) + '" style="max-width:260px">' +
+      '<select id="shopStatus">' + opt("all", "全部", st.status) + opt("on", "在售", st.status) +
+      opt("off", "已下架", st.status) + opt("oos", "缺货", st.status) + "</select>" +
+      '<button class="btn mini" type="button" data-act="shop-search">查询</button>' +
+      '<span class="help" id="shopTotal"></span></div>' +
+      '<div class="mt12" id="shopTable"></div></div>';
+    $("shopCfgForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const body = {};
+      ["shop_on", "shop_register_on", "shop_usd_cny", "shop_markup_pct", "shop_allow_oos",
+       "shop_order_days", "shop_buy_per_hour", "shop_sync_pages", "shop_sync_cates"].forEach((k) => {
+        if (f[k]) body[k] = f[k].value;
+      });
+      const d = await api("/admin/api/shop/settings", { method: "POST", body });
+      toast(d.ok ? "商城设置已保存" : (d.error || "保存失败"), d.ok ? "good" : "bad");
+    });
+    $("shopAddForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const d = await api("/admin/api/shop/product/add", { method: "POST", body: {
+        app_id: f.app_id.value, name: f.name.value, cate_name: f.cate_name.value,
+        ptype: f.ptype.value, price_yuan: f.price_yuan.value } });
+      toast(d.ok ? "商品已添加" : (d.error || "添加失败"), d.ok ? "good" : "bad");
+      if (d.ok) { f.reset(); loadShopProducts(); }
+    });
+    loadShopProducts();
+    refreshSync();
+  }
+
+  async function loadShopProducts() {
+    const st = S.pageState.shop;
+    const box = $("shopTable");
+    if (!box || !st) return;
+    const q = new URLSearchParams({ q: st.q || "", status: st.status || "all",
+      page: String(st.page || 1), size: "50" });
+    const d = await api("/admin/api/shop/products?" + q.toString());
+    if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+    if ($("shopTotal")) $("shopTotal").textContent = "共 " + d.total + " 个商品";
+    const rows = (d.products || []).map((p) => {
+      const onoff = p.enabled ? badge("在售", "g") : badge("下架", "");
+      const stock = p.stock > 0 ? p.stock : badge("缺货", "bad");
+      return "<tr><td class='mono'>" + p.id + "</td><td style='font-size:16px'>" + esc(p.icon) +
+        "</td><td><b>" + esc(p.name) + "</b><div class='mono small'>appId " + p.app_id +
+        " · type " + p.ptype + "</div></td><td>" + esc(p.cate_name || "—") +
+        "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" + p.success + "%</td>" +
+        "<td class='mono'>$" + Number(p.usd || 0).toFixed(3) + "</td>" +
+        "<td><input class='shop-price' data-id='" + p.id + "' value='" + yuan(p.price_cents) +
+        "' style='width:84px'></td><td class='mono'>" + stock + "</td><td>" + onoff +
+        "</td><td><button class='btn mini' data-act='shop-save' data-id='" + p.id +
+        "'>保存价格</button> <button class='btn mini' data-act='shop-toggle' data-id='" + p.id +
+        "' data-on='" + (p.enabled ? "0" : "1") + "'>" + (p.enabled ? "下架" : "上架") +
+        "</button> <button class='btn mini danger' data-act='shop-del' data-id='" + p.id +
+        "'>删除</button></td></tr>";
+    }).join("");
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th></th><th>平台</th>' +
+      "<th>运营商</th><th>卡类型</th><th>成功率</th><th>USD 参考</th><th>售价 ¥</th><th>库存</th>" +
+      "<th>状态</th><th>操作</th></tr></thead><tbody>" +
+      (rows || "<tr><td colspan=11 class='empty'>还没有商品，点上方「立即同步平台列表」</td></tr>") +
+      "</tbody></table></div>" + pager(d.total, d.page, d.size);
+  }
+
+  async function refreshSync() {
+    const el = $("syncStat");
+    if (!el) return;
+    const d = await api("/admin/api/shop/sync/status");
+    if (!d.ok) return;
+    el.textContent = d.running
+      ? ("同步中 " + d.done + " / " + (d.total || "?") + " · " + (d.msg || ""))
+      : (d.msg || "未开始");
+    if (d.running) setTimeout(refreshSync, 1500);
+    else if (S.route === "shop") loadShopProducts();
+  }
+  async function pageShopOrders() {
+    const st = S.pageState.shoporders = S.pageState.shoporders || { status: "", q: "", page: 1 };
+    content.innerHTML =
+      '<div class="card"><div class="card-title"><h3>商城订单</h3>' +
+      '<span class="hint">每单自动生成 卡号:手机号----接码地址 直链卡</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<input id="ordQ" placeholder="搜索用户 / 号码 / 平台" value="' + esc(st.q) + '" style="max-width:280px">' +
+      '<select id="ordStatus">' + opt("", "全部状态", st.status) + opt("done", "已发货", st.status) +
+      opt("pending", "处理中", st.status) + opt("failed", "失败", st.status) +
+      opt("refunded", "已退款", st.status) + "</select>" +
+      '<button class="btn mini" type="button" data-act="ord-search">查询</button>' +
+      '<span class="help" id="ordTotal"></span></div>' +
+      '<div class="mt12" id="ordTable"></div></div>';
+    loadShopOrders();
+  }
+
+  async function loadShopOrders() {
+    const st = S.pageState.shoporders;
+    const box = $("ordTable");
+    if (!box || !st) return;
+    const q = new URLSearchParams({ q: st.q || "", status: st.status || "",
+      page: String(st.page || 1), size: "50" });
+    const d = await api("/admin/api/shop/orders?" + q.toString());
+    if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+    if ($("ordTotal")) $("ordTotal").textContent = "共 " + d.total + " 单";
+    const cls = { done: "g", pending: "warn", failed: "bad", refunded: "violet" };
+    const label = { done: "已发货", pending: "处理中", failed: "失败", refunded: "已退款" };
+    const rows = (d.orders || []).map((o) =>
+      "<tr><td class='mono'>" + o.id + "</td><td class='mono'>" + fmt(o.created_at) + "</td><td>" +
+      esc(o.username) + "</td><td>" + esc(o.name) + (o.card_type ? " · " + esc(o.card_type) : "") +
+      "</td><td class='mono'>" + esc(o.phone || "—") + "</td><td class='mono'>¥" + esc(o.price) +
+      "</td><td>" + badge(label[o.status] || o.status, cls[o.status] || "") + "</td>" +
+      "<td class='mono small'>" + esc((o.error || "").slice(0, 40)) + "</td>" +
+      "<td>" + (o.link
+        ? '<button class="btn mini" data-act="copy" data-text="' + esc(o.link) + '">复制卡密</button>'
+        : "—") +
+      (o.status === "done" || o.status === "failed"
+        ? ' <button class="btn mini danger" data-act="ord-refund" data-id="' + o.id + '">退款</button>'
+        : "") + "</td></tr>").join("");
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>时间</th><th>用户</th>' +
+      "<th>平台</th><th>号码</th><th>金额</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody>" +
+      (rows || "<tr><td colspan=9 class='empty'>暂无订单</td></tr>") + "</tbody></table></div>" +
+      pager(d.total, d.page, d.size);
+  }
+
+  async function pageRcodes() {
+    const st = S.pageState.rcodes = S.pageState.rcodes || { batch: "", status: "", page: 1 };
+    content.innerHTML =
+      '<div class="card"><div class="card-title"><h3>生成充值码</h3>' +
+      '<span class="hint">一次性核销 · 明文只在生成时显示一次</span></div>' +
+      '<form id="rcGenForm" class="form-grid">' +
+      '<label class="fld">数量<input name="count" type="number" min="1" max="500" value="10"></label>' +
+      '<label class="fld">每张面额（元）<input name="amount_yuan" value="50"></label>' +
+      '<label class="fld">有效期（天，0=永久）<input name="expires_days" value="0"></label>' +
+      '<label class="fld">备注<input name="note" placeholder="例如 十月批次"></label>' +
+      '<div class="fld"><button class="btn primary" type="submit">生成充值码</button></div>' +
+      "</form></div>" +
+      '<div class="card mt18"><div class="card-title"><h3>充值码列表</h3>' +
+      '<span class="hint">只保存哈希，无法反查明文</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<input id="rcBatch" placeholder="批次号" value="' + esc(st.batch) + '" style="max-width:240px">' +
+      '<select id="rcStatus">' + opt("", "全部状态", st.status) + opt("active", "未使用", st.status) +
+      opt("used", "已使用", st.status) + opt("disabled", "已作废", st.status) + "</select>" +
+      '<button class="btn mini" type="button" data-act="rc-search">查询</button>' +
+      '<span class="help" id="rcTotal"></span></div>' +
+      '<div class="mt12" id="rcTable"></div></div>';
+    $("rcGenForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const btn = f.querySelector("button[type=submit]");
+      btn.disabled = true;
+      const d = await api("/admin/api/shop/rcodes", { method: "POST", body: {
+        count: f.count.value, amount_yuan: f.amount_yuan.value,
+        expires_days: f.expires_days.value, note: f.note.value } });
+      btn.disabled = false;
+      if (!d.ok) { toast(d.error || "生成失败", "bad"); return; }
+      toast("已生成 " + d.count + " 张 · 批次 " + d.batch, "good");
+      showCodes(d);
+      loadRcodes();
+    });
+    loadRcodes();
+  }
+
+  function showCodes(d) {
+    const text = d.codes.join("\n");
+    openModal("充值码 · 批次 " + d.batch,
+      '<div class="hint">共 ' + d.count + " 张，每张 ¥" + esc(d.amount) +
+      "，仅此一次显示，请立即复制或下载。</div>" +
+      '<textarea id="allCodes" readonly style="width:100%;height:220px;margin-top:12px;font-family:var(--mono);' +
+      'font-size:12px;background:#080d18;color:#cfe8ff;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px">' +
+      esc(text) + "</textarea>" +
+      '<div class="row gap10 wrap mt12">' +
+      '<button class="btn primary" type="button" data-act="copy-all-codes">复制全部</button>' +
+      '<button class="btn" type="button" data-act="dl-codes">下载 txt</button></div>', true);
+    S.lastCodes = { text: text, batch: d.batch };
+  }
+
+  async function loadRcodes() {
+    const st = S.pageState.rcodes;
+    const box = $("rcTable");
+    if (!box || !st) return;
+    const q = new URLSearchParams({ batch: st.batch || "", status: st.status || "",
+      page: String(st.page || 1), size: "50" });
+    const d = await api("/admin/api/shop/rcodes?" + q.toString());
+    if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+    if ($("rcTotal")) $("rcTotal").textContent = "共 " + d.total + " 张";
+    const cls = { active: "g", used: "", disabled: "bad" };
+    const rlabel = { active: "未使用", used: "已使用", disabled: "已作废" };
+    const rows = (d.rcodes || []).map((r) =>
+      "<tr><td class='mono'>" + r.id + "</td><td class='mono'>" + esc(r.prefix) + "…</td>" +
+      "<td class='mono'>¥" + esc(r.amount) + "</td><td>" + badge(rlabel[r.status] || r.status, cls[r.status] || "") +
+      "</td><td class='mono small'>" + esc(r.batch) + "</td><td>" + esc(r.used_by || "—") +
+      "</td><td class='mono'>" + fmt(r.created_at) + "</td><td class='mono'>" +
+      (r.used_at ? fmt(r.used_at) : "—") + "</td><td>" +
+      (r.status === "active"
+        ? '<button class="btn mini danger" data-act="rc-disable" data-id="' + r.id + '">作废</button>'
+        : "—") + "</td></tr>").join("");
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>前缀</th><th>面额</th>' +
+      "<th>状态</th><th>批次</th><th>使用者</th><th>生成时间</th><th>使用时间</th><th>操作</th>" +
+      "</tr></thead><tbody>" + (rows || "<tr><td colspan=9 class='empty'>暂无充值码</td></tr>") +
+      "</tbody></table></div>" + pager(d.total, d.page, d.size);
+  }
+
+  async function pageShopUsers() {
+    const st = S.pageState.shopusers = S.pageState.shopusers || { q: "", page: 1 };
+    content.innerHTML =
+      '<div class="card"><div class="card-title"><h3>商城用户</h3>' +
+      '<span class="hint">余额可手动调整，所有变动都写入流水</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<input id="uQ" placeholder="搜索账号" value="' + esc(st.q) + '" style="max-width:260px">' +
+      '<button class="btn mini" type="button" data-act="u-search">查询</button>' +
+      '<span class="help" id="uTotal"></span></div>' +
+      '<div class="mt12" id="uTable"></div></div>';
+    loadShopUsers();
+  }
+
+  async function loadShopUsers() {
+    const st = S.pageState.shopusers;
+    const box = $("uTable");
+    if (!box || !st) return;
+    const q = new URLSearchParams({ q: st.q || "", page: String(st.page || 1), size: "50" });
+    const d = await api("/admin/api/shop/users?" + q.toString());
+    if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+    if ($("uTotal")) $("uTotal").textContent = "共 " + d.total + " 位";
+    const rows = (d.users || []).map((u) =>
+      "<tr><td class='mono'>" + u.id + "</td><td><b>" + esc(u.username) + "</b></td>" +
+      "<td class='mono'>¥" + esc(u.balance) + "</td><td class='mono'>" + u.orders +
+      "</td><td class='mono'>¥" + esc(u.spent) + "</td><td>" +
+      badge(u.status === "active" ? "正常" : "已禁用", u.status === "active" ? "g" : "bad") +
+      "</td><td class='mono'>" + fmt(u.created_at) + "</td><td class='mono'>" +
+      fmt(u.last_login_at) + "</td><td class='mono small'>" + esc(u.last_ip || "—") + "</td><td>" +
+      '<button class="btn mini" data-act="u-balance" data-id="' + u.id + '" data-name="' +
+      esc(u.username) + '">调余额</button> ' +
+      '<button class="btn mini ' + (u.status === "active" ? "danger" : "") + '" data-act="u-status" ' +
+      'data-id="' + u.id + '" data-status="' + (u.status === "active" ? "disabled" : "active") + '">' +
+      (u.status === "active" ? "禁用" : "启用") + "</button></td></tr>").join("");
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>账号</th><th>余额</th>' +
+      "<th>订单</th><th>累计消费</th><th>状态</th><th>注册时间</th><th>最近登录</th><th>IP</th>" +
+      "<th>操作</th></tr></thead><tbody>" +
+      (rows || "<tr><td colspan=10 class='empty'>暂无用户</td></tr>") + "</tbody></table></div>" +
+      pager(d.total, d.page, d.size);
+  }
+
+  async function shopAction(act, el) {
+    const id = el.dataset.id;
+    if (act === "shop-save") {
+      const inp = document.querySelector(".shop-price[data-id='" + id + "']");
+      const d = await api("/admin/api/shop/product", { method: "POST",
+        body: { id, price_yuan: inp ? inp.value : "" } });
+      toast(d.ok ? "价格已保存" : (d.error || "保存失败"), d.ok ? "good" : "bad");
+      return d.ok && loadShopProducts();
+    }
+    if (act === "shop-toggle") {
+      const d = await api("/admin/api/shop/product", { method: "POST",
+        body: { id, enabled: el.dataset.on } });
+      toast(d.ok ? (el.dataset.on === "1" ? "已上架" : "已下架") : (d.error || "操作失败"),
+        d.ok ? "good" : "bad");
+      return d.ok && loadShopProducts();
+    }
+    if (act === "shop-del") {
+      if (!confirm("删除后该商品从商城移除（已售卡密不受影响），确定？")) return;
+      const d = await api("/admin/api/shop/product/delete", { method: "POST", body: { id } });
+      toast(d.ok ? "已删除" : (d.error || "删除失败"), d.ok ? "good" : "bad");
+      return d.ok && loadShopProducts();
+    }
+    if (act === "shop-sync") {
+      const d = await api("/admin/api/shop/sync", { method: "POST", body: {} });
+      toast(d.ok ? "同步已开始，请稍候…" : (d.error || "同步失败"), d.ok ? "good" : "bad");
+      refreshSync();
+      return;
+    }
+    if (act === "ord-refund") {
+      if (!confirm("退款会把金额退回用户余额并停用该直链卡，确定？")) return;
+      const d = await api("/admin/api/shop/order/refund", { method: "POST", body: { id } });
+      toast(d.ok ? ("已退款，用户余额 ¥" + d.balance) : (d.error || "退款失败"), d.ok ? "good" : "bad");
+      return d.ok && loadShopOrders();
+    }
+    if (act === "rc-disable") {
+      if (!confirm("作废后该充值码无法再使用，确定？")) return;
+      const d = await api("/admin/api/shop/rcodes/disable", { method: "POST", body: { id } });
+      toast(d.ok ? "已作废" : (d.error || "操作失败"), d.ok ? "good" : "bad");
+      return d.ok && loadRcodes();
+    }
+    if (act === "u-balance") {
+      const v = prompt("调整 " + (el.dataset.name || "") + " 的余额（元，正数加、负数减，例如 50 或 -20）", "");
+      if (v === null) return;
+      const d = await api("/admin/api/shop/user/balance", { method: "POST",
+        body: { id, delta_yuan: v, note: "后台手动调整" } });
+      toast(d.ok ? ("已调整，余额 ¥" + d.balance) : (d.error || "调整失败"), d.ok ? "good" : "bad");
+      return d.ok && loadShopUsers();
+    }
+    if (act === "u-status") {
+      const off = el.dataset.status !== "active";
+      if (off && !confirm("禁用后该用户会立即退出登录且无法下单，确定？")) return;
+      const d = await api("/admin/api/shop/user/status", { method: "POST",
+        body: { id, status: el.dataset.status } });
+      toast(d.ok ? (off ? "已禁用" : "已启用") : (d.error || "操作失败"), d.ok ? "good" : "bad");
+      return d.ok && loadShopUsers();
+    }
+    if (act === "shop-search") {
+      const st = S.pageState.shop;
+      st.q = $("shopQ").value.trim(); st.status = $("shopStatus").value; st.page = 1;
+      return loadShopProducts();
+    }
+    if (act === "ord-search") {
+      const st = S.pageState.shoporders;
+      st.q = $("ordQ").value.trim(); st.status = $("ordStatus").value; st.page = 1;
+      return loadShopOrders();
+    }
+    if (act === "rc-search") {
+      const st = S.pageState.rcodes;
+      st.batch = $("rcBatch").value.trim(); st.status = $("rcStatus").value; st.page = 1;
+      return loadRcodes();
+    }
+    if (act === "u-search") {
+      const st = S.pageState.shopusers;
+      st.q = $("uQ").value.trim(); st.page = 1;
+      return loadShopUsers();
+    }
+    if (act === "copy-all-codes") {
+      copy((S.lastCodes && S.lastCodes.text) || "", "已复制全部充值码");
+      return;
+    }
+    if (act === "dl-codes") {
+      const t = (S.lastCodes && S.lastCodes.text) || "";
+      const blob = new Blob([t], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "rcodes-" + ((S.lastCodes && S.lastCodes.batch) || "batch") + ".txt";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      return;
+    }
+  }
   boot();
 })();
