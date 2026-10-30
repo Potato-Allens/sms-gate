@@ -106,6 +106,17 @@ td.mono,th.mono{font-family:var(--mono);font-size:11.5px}
 .badge.info{color:#a8c6ff;border-color:#4f8cff40;background:#4f8cff0f}
 .badge.violet{color:#cbb9ff;border-color:#a78bfa40;background:#a78bfa0f}
 
+.shop-pcell{min-width:118px;white-space:nowrap}
+.shop-price{width:92px}
+.shop-last{margin-top:4px;font-size:10px;color:var(--dim);line-height:1.6;white-space:nowrap}
+.shop-last .sl-saved{color:#8dffdd}
+.shop-last .sl-sug{color:var(--dim)}
+.shop-last.empty .sl-saved{color:#ffb86bcc}
+.shop-last.changed .sl-saved{color:#c8fff0}
+.shop-adopt{display:inline-block;margin-top:3px;padding:0;border:0;background:none;cursor:pointer;
+  font-size:10.5px;color:#8fb6ff;text-decoration:underline;font-family:inherit}
+.shop-adopt:hover{color:#c3d8ff}
+.shop-price.dirty{border-color:#ffb86bcc!important;box-shadow:0 0 0 3px #ffb86b1f}
 .shop-price.saved{border-color:#35e0b0aa!important;box-shadow:0 0 0 3px #35e0b022}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px;font-size:11.5px;color:var(--dim)}
 .pager b{color:var(--muted);font-family:var(--mono)}

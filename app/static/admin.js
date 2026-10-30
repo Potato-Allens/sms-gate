@@ -1078,12 +1078,15 @@
       "</form></div>" +
 
       '<div class="card mt18">' +
-      '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价框已按 USD × 汇率预填，可直接改；「保存价格」只保存当前这一行</span></div>' +
+      '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价框里是<b>上次保存</b>的价格，框下小字是建议价（USD × 汇率）；改动会亮橙色边框，可单行保存或一键保存全部</span></div>' +
       '<div class="row gap10 wrap mt8">' +
       '<input id="shopQ" placeholder="搜索平台 / 分类" value="' + esc(st.q) + '" style="max-width:260px">' +
       '<select id="shopStatus">' + opt("all", "全部", st.status) + opt("on", "在售", st.status) +
       opt("off", "已下架", st.status) + opt("oos", "缺货", st.status) + "</select>" +
       '<button class="btn mini" type="button" data-act="shop-search">查询</button>' +
+      '<button class="btn mini primary" type="button" data-act="shop-save-all" id="shopSaveAll"' +
+      ' disabled>一键保存全部</button>' +
+      '<span class="help" id="shopDirty"></span>' +
       '<span class="help" id="shopTotal"></span></div>' +
       '<div class="mt12" id="shopTable"></div></div>';
     $("shopCfgForm").addEventListener("submit", async (e) => {
@@ -1124,14 +1127,26 @@
     const rows = (d.products || []).map((p) => {
       const onoff = p.enabled ? badge("在售", "g") : badge("下架", "");
       const stock = p.stock > 0 ? p.stock : badge("缺货", "bad");
+      const savedC = Number(p.price_cents || 0);          // 上次保存的售价（分）
+      const suggest = Number(p.usd || 0) * rate;          // 建议价 = USD × 汇率
+      const val = (savedC > 0 ? savedC / 100 : suggest).toFixed(2);
+      const tip = "<span class='sl-saved'>" +
+        (savedC > 0 ? "上次 ¥" + (savedC / 100).toFixed(2) : "尚未定价") +
+        "</span><br><span class='sl-sug'>建议 ¥" + suggest.toFixed(2) + "</span>";
       return "<tr><td class='mono'>" + p.id + "</td><td>" + icoHtml(p.icon) +
         "</td><td><b>" + esc(p.name) + "</b><div class='mono small'>appId " + p.app_id +
         " · type " + p.ptype + "</div></td><td>" + esc(p.cate_name || "—") +
         "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" + p.success + "%</td>" +
         "<td class='mono'>$" + Number(p.usd || 0).toFixed(3) + "</td>" +
-        "<td><input class='shop-price' data-id='" + p.id + "' data-usd='" + Number(p.usd || 0) +
-        "' value='" + (Number(p.usd || 0) * rate).toFixed(2) +
-        "' style='width:90px'></td><td class='mono'>" + stock + "</td><td>" + onoff +
+        "<td class='shop-pcell'><input class='shop-price' data-id='" + p.id +
+        "' data-saved='" + (savedC / 100).toFixed(2) +
+        "' data-suggest='" + suggest.toFixed(2) + "' value='" + val + "'>" +
+        "<div class='shop-last" + (savedC > 0 ? "" : " empty") + "' data-id='" + p.id +
+        "'>" + tip + "</div>" +
+        (savedC > 0 && Math.abs(suggest - savedC / 100) > 0.004
+          ? "<button class='shop-adopt' type='button' data-act='shop-adopt' data-id='" + p.id +
+            "'>用建议价</button>" : "") +
+        "</td><td class='mono'>" + stock + "</td><td>" + onoff +
         "</td><td><button class='btn mini' data-act='shop-save' data-id='" + p.id +
         "'>保存价格</button> <button class='btn mini' data-act='shop-toggle' data-id='" + p.id +
         "' data-on='" + (p.enabled ? "0" : "1") + "'>" + (p.enabled ? "下架" : "上架") +
@@ -1143,6 +1158,53 @@
       "<th>状态</th><th>操作</th></tr></thead><tbody>" +
       (rows || "<tr><td colspan=11 class='empty'>还没有商品，点上方「立即同步平台列表」</td></tr>") +
       "</tbody></table></div>" + pager(d.total, d.page, d.size);
+    shopSyncDirty();
+  }
+
+  // ---- 售价：单行写回 / 改动高亮 / 未保存计数 ----
+  function shopApplySaved(inp, price) {
+    if (!inp) return;
+    const v = Number(price || 0);
+    inp.dataset.saved = v.toFixed(2);
+    inp.classList.remove("dirty");
+    inp.classList.add("saved");
+    setTimeout(() => inp.classList.remove("saved"), 1200);
+    const tip = document.querySelector(".shop-last[data-id='" + inp.dataset.id + "']");
+    if (tip) {
+      const sug = Number(inp.dataset.suggest || 0);
+      tip.innerHTML = "<span class='sl-saved'>上次 ¥" + v.toFixed(2) +
+        "</span><br><span class='sl-sug'>建议 ¥" + sug.toFixed(2) + "</span>";
+      tip.classList.remove("empty");
+      tip.classList.add("changed");
+      setTimeout(() => tip.classList.remove("changed"), 1600);
+    }
+    shopSyncDirty();
+  }
+
+  function shopMarkDirty(inp) {
+    if (!inp) return;
+    const diff = Math.abs(Number(inp.value || 0) - Number(inp.dataset.saved || 0)) > 0.004;
+    inp.classList.toggle("dirty", diff);
+    shopSyncDirty();
+  }
+
+  function shopDirtyRows() {
+    return Array.from(document.querySelectorAll(".shop-price")).filter((i) =>
+      Math.abs(Number(i.value || 0) - Number(i.dataset.saved || 0)) > 0.004);
+  }
+
+  function shopSyncDirty() {
+    const n = shopDirtyRows().length;
+    const lab = $("shopDirty");
+    if (lab) {
+      lab.textContent = n ? "有 " + n + " 项改动还没保存" : (document.querySelector(".shop-price") ? "全部已保存" : "");
+      lab.style.color = n ? "#ffc27a" : "";
+    }
+    const btn = $("shopSaveAll");
+    if (btn) {
+      btn.disabled = !n;
+      btn.textContent = n ? "一键保存全部（" + n + "）" : "一键保存全部";
+    }
   }
 
   async function refreshSync() {
@@ -1477,22 +1539,51 @@
       toast(d.ok ? "已移除" : (d.error || "操作失败"), d.ok ? "good" : "bad");
       return d.ok && pageStock();
     }
+    if (act === "shop-adopt") {
+      const inp = document.querySelector(".shop-price[data-id='" + id + "']");
+      if (!inp) return;
+      inp.value = Number(inp.dataset.suggest || 0).toFixed(2);
+      shopMarkDirty(inp);
+      return;
+    }
+    if (act === "shop-save-all") {
+      const list = Array.from(document.querySelectorAll(".shop-price")).filter((i) =>
+        Math.abs(Number(i.value || 0) - Number(i.dataset.saved || 0)) > 0.004);
+      if (!list.length) { toast("没有需要保存的改动"); return; }
+      if (!confirm("将保存 " + list.length + " 个改动的售价，确定？")) return;
+      const btn = el;
+      btn.disabled = true;
+      let okN = 0, badN = 0, k = 0;
+      for (const inp of list) {
+        k++;
+        btn.textContent = "保存中 " + k + "/" + list.length;
+        let d;
+        try {
+          d = await api("/admin/api/shop/product", { method: "POST",
+            body: { id: inp.dataset.id, price_yuan: inp.value } });
+        } catch (e) { d = { ok: false, error: "网络异常" }; }
+        if (d && d.ok) { okN++; shopApplySaved(inp, d.price); }
+        else { badN++; inp.classList.add("dirty"); }
+        shopSyncDirty();
+      }
+      btn.disabled = false;
+      shopSyncDirty();
+      toast(badN ? ("已保存 " + okN + " 个，" + badN + " 个失败")
+                 : ("已保存 " + okN + " 个价格"), badN ? "bad" : "good");
+      return;
+    }
     if (act === "shop-save") {
       const inp = document.querySelector(".shop-price[data-id='" + id + "']");
       const d = await api("/admin/api/shop/product", { method: "POST",
         body: { id, price_yuan: inp ? inp.value : "" } });
-      toast(d.ok ? ("已保存 ¥" + d.price) : (d.error || "保存失败"), d.ok ? "good" : "bad");
-      if (d.ok) {
-        // 只回写当前行，不重建表格：其它输入框里没保存的修改保持原样
-        if (inp) {
-          inp.classList.add("saved");
-          setTimeout(() => inp.classList.remove("saved"), 1200);
-        }
-        const old = el.textContent;
-        el.textContent = "已保存";
-        el.disabled = true;
-        setTimeout(() => { el.textContent = old; el.disabled = false; }, 1200);
-      }
+      if (!d.ok) { toast(d.error || "保存失败", "bad"); return; }
+      toast("已保存 ¥" + d.price, "good");
+      // 只回写当前行，不重建表格：其它输入框里没保存的修改保持原样
+      shopApplySaved(inp, d.price);
+      const old = el.textContent;
+      el.textContent = "已保存";
+      el.disabled = true;
+      setTimeout(() => { el.textContent = old; el.disabled = false; }, 1200);
       return;
     }
     if (act === "shop-toggle") {
@@ -1577,5 +1668,11 @@
       return;
     }
   }
+  // 售价框输入即时高亮（橙色边框）并刷新「未保存 n 项」
+  document.addEventListener("input", (e) => {
+    const inp = e.target;
+    if (!inp || !inp.classList || !inp.classList.contains("shop-price")) return;
+    shopMarkDirty(inp);
+  });
   boot();
 })();
