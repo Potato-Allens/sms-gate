@@ -40,6 +40,25 @@
     } else legacy();
   }
 
+  var csrfWait = null;
+  /* 会话里的 csrf 可能因为刷新/换标签页/会话轮换而过期：重新拉一次，用户无感 */
+  function refreshCsrf() {
+    if (csrfWait) return csrfWait;
+    csrfWait = fetch("/shop/api/me", { credentials: "same-origin",
+                                       headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        csrfWait = null;
+        if (d && d.ok && d.csrf) {
+          STATE.csrf = d.csrf;
+          if (d.user) STATE.user = d.user;
+          return true;
+        }
+        return false;
+      }, function () { csrfWait = null; return false; });
+    return csrfWait;
+  }
+
   function api(path, opt) {
     opt = opt || {};
     var init = { method: opt.method || "GET", credentials: "same-origin",
@@ -51,7 +70,19 @@
     }
     return fetch(path, init).then(function (r) {
       return r.json().catch(function () { return { ok: false, error: "响应异常" }; })
-        .then(function (d) { d._status = r.status; return d; });
+        .then(function (d) {
+          d._status = r.status;
+          // 后端可能直接抛 HTTPException({"detail": ...})，统一成 error 文案
+          if (!d.error && d.detail) d.error = typeof d.detail === "string" ? d.detail : "请求失败";
+          // 403（CSRF/会话失效）：刷新 token 后自动重试一次，不让用户白发一次下单
+          if (opt.body && r.status === 403 && !opt._retried) {
+            return refreshCsrf().then(function (got) {
+              if (!got) return d;
+              return api(path, { method: opt.method, body: opt.body, _retried: true });
+            });
+          }
+          return d;
+        });
     }, function () { return { ok: false, error: "网络异常，请重试", _status: 0 }; });
   }
 
@@ -182,6 +213,7 @@
       }
       REGIONS = d.regions || [];
       TYPES = d.types || [];
+      if (d.csrf) STATE.csrf = d.csrf;
       renderChips();
       renderProducts(d.products || []);
       setNavUser(d.user || null);
@@ -474,7 +506,10 @@
     timer = setTimeout(function () { STATE.q = e.target.value.trim(); loadShop(); }, 280);
   });
 
-  if (page === "shop") { loadShop(); loadStock(); }
+  if (page === "shop") {
+    loadShop(); loadStock();
+    if (!STATE.csrf) refreshCsrf();
+  }
   else if (page === "login") bindLogin();
   else if (page === "me") { bindMe(); loadMe(); }
 })();

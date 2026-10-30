@@ -299,6 +299,7 @@ def api_products(request: Request, region: str = "", type: str = "", q: str = ""
         return err("商城维护中，请稍后再来", 503)
     u = get_user(request)
     return ok(user=user_public(u) if u else None,
+              csrf=(u["csrf"] if u else ""),
               products=visible_products(region.strip(), type.strip(), q.strip()[:40]),
               **catalog_meta())
 

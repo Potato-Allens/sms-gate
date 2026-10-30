@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio, threading, time
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -123,6 +125,22 @@ async def guard(request: Request, call_next):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
     return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    """API 一律返回 ok:false + error，前端才拿得到可读文案（不再只有 403 裸 detail）。"""
+    path = request.url.path
+    if path.startswith(("/api/", "/admin/api/", "/shop/api/")):
+        detail = exc.detail
+        msg = detail if isinstance(detail, str) else "请求失败"
+        body = {"ok": False, "error": msg, "status": exc.status_code}
+        if exc.status_code == 403 and "CSRF" in msg:
+            body["csrf_stale"] = True
+            body["error"] = "登录状态已失效，请刷新页面后重试"
+        return JSONResponse(body, status_code=exc.status_code,
+                            headers=getattr(exc, "headers", None))
+    return await http_exception_handler(request, exc)
 
 
 @app.exception_handler(Exception)
