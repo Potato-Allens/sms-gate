@@ -617,6 +617,37 @@ def _cn_card_type(cate_name: str, card_type: str = "") -> str:
     return "全部"
 
 
+_CN_VIRT_PREFIX = ("162", "165", "167", "170", "171")
+
+
+def cn_sim_type(phone: str) -> str:
+    """国内号码 -> 实卡 / 虚拟卡（162/165/167/170/171 为虚商号段）。"""
+    num = re.sub(r"\D", "", phone or "")
+    if num.startswith("86") and len(num) > 11:
+        num = num[2:]
+    return "虚拟卡" if num[:3] in _CN_VIRT_PREFIX else "实卡"
+
+
+def fix_cn_card_types() -> dict:
+    """给历史国内直链卡/库存补齐实卡 / 虚拟卡标记（幂等，启动时跑）。"""
+    rl = st = 0
+    try:
+        with db.tx() as c:
+            for r in c.execute("SELECT id, phone FROM relay_cards WHERE country='cn' "
+                               "AND (card_type IS NULL OR card_type='')").fetchall():
+                c.execute("UPDATE relay_cards SET card_type=? WHERE id=?",
+                          (cn_sim_type(r["phone"]), r["id"]))
+                rl += 1
+            for r in c.execute("SELECT id, phone FROM shop_stock WHERE country='cn' "
+                               "AND (card_type IS NULL OR card_type='')").fetchall():
+                c.execute("UPDATE shop_stock SET card_type=? WHERE id=?",
+                          (cn_sim_type(r["phone"]), r["id"]))
+                st += 1
+    except Exception:
+        pass
+    return {"relay": rl, "stock": st}
+
+
 def _buy_cn(p) -> dict:
     """国内实卡/虚卡：从 d1jiema 按「豆包」关键词取一个号。"""
     from . import d1jiema
@@ -719,8 +750,11 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
         except Exception:
             days = 0
         note = "商城 | %s | %s | %s" % (p["name"], p["cate_name"] or "", p["card_type"] or "")
+        ctype_now = p["card_type"] or ""
+        if (p["country"] or "") == "cn":
+            ctype_now = cn_sim_type(got["phone"])
         row = _create_relay(got["phone"], got["upstream"], p["country"] or "", note,
-                            days, "shop:" + str(uid), p["card_type"] or "")
+                            days, "shop:" + str(uid), ctype_now)
         done = int(time.time())
         db.conn().execute(
             "UPDATE shop_orders SET status='done', relay_card_id=?, relay_token=?, phone=?, "
@@ -1413,8 +1447,11 @@ async def adm_stock_recover(request: Request):
         with db.tx() as c:
             for r in rows:
                 line = relay_api._line(r["phone"], r["token"])
+                rt = ctype or (r["card_type"] or "")
+                if not rt and (r["country"] or country) == "cn":
+                    rt = cn_sim_type(r["phone"])
                 if _stock_insert(c, "relay", r["id"], line, r["phone"], r["country"] or country,
-                                 cate, ctype or (r["card_type"] or ""), price, batch, note):
+                                 cate, rt, price, batch, note):
                     added += 1
                 else:
                     dup += 1
@@ -1450,9 +1487,12 @@ async def adm_stock_recover(request: Request):
                     bad.append("找不到直链:" + tok[:16])
                     continue
                 line = relay_api._line(rc["phone"], rc["token"])
+                rt2 = ctype or (rc["card_type"] or "")
+                if not rt2 and (rc["country"] or country) == "cn":
+                    rt2 = cn_sim_type(rc["phone"])
                 if _stock_insert(c, "relay", rc["id"], line, rc["phone"],
                                  rc["country"] or country, cate,
-                                 ctype or (rc["card_type"] or ""), price, batch, note):
+                                 rt2, price, batch, note):
                     added += 1
                 else:
                     dup += 1

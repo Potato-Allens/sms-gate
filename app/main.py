@@ -40,6 +40,10 @@ def _startup() -> None:
         shop.seed_cn_products()      # 国内实卡/虚卡商品（d1jiema 货源）
     except Exception:
         pass
+    try:
+        shop.fix_cn_card_types()     # 历史国内号码补齐 实卡/虚拟卡
+    except Exception:
+        pass
     security.purge_expired()
     # Queue is retired: everyone allocates directly; leftovers are closed once.
     nexq.retire_queue()

@@ -1441,7 +1441,9 @@
       '<label class="fld">运营商 / 分类<input name="cate_name" placeholder="美国(实卡) / 英国卡 / 香港卡"></label>' +
       '<label class="fld">卡类型<select name="card_type"><option value="">不限 / 按原卡</option>' +
       '<option value="首次卡">首次卡</option><option value="重启卡">重启卡</option>' +
-      '<option value="续费卡">续费卡</option></select></label>' +
+      '<option value="续费卡">续费卡</option>' +
+      '<option value="实卡">实卡（国内）</option>' +
+      '<option value="虚拟卡">虚拟卡（国内）</option></select></label>' +
       '<label class="fld">现货售价（元）<input name="price_yuan" placeholder="5.00"></label>' +
       '<label class="fld">本次最多回收<input name="limit" value="50"></label>' +
       '<label class="fld">只回收 N 天前创建（0=不限）<input name="days" value="0"></label>' +
