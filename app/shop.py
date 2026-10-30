@@ -640,6 +640,7 @@ def order_public(o) -> dict:
         "card_type": o["card_type"], "price": money(o["price_cents"]),
         "status": o["status"], "phone": o["phone"], "link": o["link"],
         "error": o["error"], "created_at": o["created_at"], "done_at": o["done_at"],
+        "expire_at": (o["num_expire_at"] if "num_expire_at" in o.keys() else 0) or 0,
     }
 
 
@@ -802,25 +803,36 @@ def _buy_regular(p) -> dict:
     digits = re.sub(r"\D", "", phone or "")
     if not digits:
         raise ShopError("上游返回的号码异常，请重试", 502)
-    return {"phone": "+" + digits, "upstream": "nexreg:%s:%s" % (svc, digits)}
+    try:
+        iso = str(p["country"] or "")
+    except Exception:
+        iso = ""
+    return {"phone": "+" + digits, "upstream": "nexreg:%s:%s" % (svc, digits),
+            "ttl_min": providers.regular_ttl_min(iso)}
 
 
 def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
                   actor: str, card_type: str = "", sms_keyword: str = "",
-                  sms_prefix: str = "") -> dict:
+                  sms_prefix: str = "", ttl_min: int = 0) -> dict:
     """One relay card per order (no batch row): 卡号:+phone----https://api.../smsrecord?token=..."""
     now = int(time.time())
     with db.tx() as c:
         token = relay_api._new_token(c)
         expires = now + days * 86400 if days else 0
+        try:
+            ttl = max(0, min(240, int(ttl_min or 0)))
+        except Exception:
+            ttl = 0
+        num_expire = now + ttl * 60 if ttl else 0
         cur = c.execute(
             "INSERT INTO relay_cards(token,phone,country,upstream_enc,note,status,batch_id,"
-            "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix) "
-            "VALUES(?,?,?,?,?,'active',0,?,?,?,?,?,?)",
+            "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix,num_expire_at) "
+            "VALUES(?,?,?,?,?,'active',0,?,?,?,?,?,?,?)",
             (token, phone, country, security.enc(upstream), note[:120], now, actor,
-             expires, card_type[:16], (sms_keyword or "")[:40], (sms_prefix or "")[:40]))
+             expires, card_type[:16], (sms_keyword or "")[:40], (sms_prefix or "")[:40],
+             num_expire))
         return {"id": cur.lastrowid, "token": token, "expires_at": expires,
-                "line": relay_api._line(phone, token)}
+                "num_expire_at": num_expire, "line": relay_api._line(phone, token)}
 
 
 def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
@@ -879,13 +891,18 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
             ctype_now = "虚拟卡" if req == "虚卡" else ("实卡" if req == "实卡" else "")
         pkw = (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or ""
         ppx = (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or ""
+        try:
+            ttl = int(got.get("ttl_min") or 0)
+        except Exception:
+            ttl = 0
         row = _create_relay(got["phone"], got["upstream"], p["country"] or "", note,
-                            days, "shop:" + str(uid), ctype_now, pkw, ppx)
+                            days, "shop:" + str(uid), ctype_now, pkw, ppx, ttl)
         done = int(time.time())
         cur = db.conn().execute(
             "UPDATE shop_orders SET status='done', relay_card_id=?, relay_token=?, phone=?, "
-            "link=?, done_at=? WHERE id=? AND status='pending'",
-            (row["id"], row["token"], got["phone"], row["line"], done, oid))
+            "link=?, done_at=?, num_expire_at=? WHERE id=? AND status='pending'",
+            (row["id"], row["token"], got["phone"], row["line"], done,
+             int(row.get("num_expire_at") or 0), oid))
         if cur.rowcount != 1:
             # 订单已被超时回收/退款：作废刚生成的卡，避免白拿一个号
             db.conn().execute("UPDATE relay_cards SET status='disabled' WHERE id=?",
@@ -982,7 +999,7 @@ SHOP_SETTING_KEYS = ("shop_on", "shop_register_on", "shop_usd_cny", "shop_markup
                      "shop_allow_oos", "shop_order_days", "shop_buy_per_hour",
                      "shop_min_recharge", "shop_sync_cates", "shop_sync_pages",
                      "shop_max_orders_per_user", "shop_stock_on", "shop_register_need_code",
-                     "shop_url", "shop_rcode_url")
+                     "shop_url", "shop_rcode_url", "reg_ttl_min")
 
 
 @admin_router.get("/api/shop/overview")

@@ -208,7 +208,7 @@ def _extract_code(text: str) -> str:
     return m.group(1) if m else ""
 
 
-def _fetch(url: str, timeout: int = 15, kw: str = ""):
+def _fetch(url: str, timeout: int = 15, kw: str = "", meta: dict = None):
     """GET the upstream SMS URL with SSRF guards; return (ok, reason, text)."""
     if url.startswith("d1jiema:"):
         from . import d1jiema
@@ -226,6 +226,9 @@ def _fetch(url: str, timeout: int = 15, kw: str = ""):
             svc = parts[1] if len(parts) > 1 and parts[1] else "go"
             phone = parts[2] if len(parts) > 2 else ""
             r = providers.regular_sms(phone, svc)
+            if meta is not None:
+                meta["expire_at"] = int(r.get("expire_at") or 0)
+                meta["sms_at"] = int(r.get("sms_at") or 0)
             body = (r.get("text") or "").strip()
             return True, "", (("1|" + body) if body else "0|0")
         except Exception:
@@ -496,6 +499,7 @@ def relay_list(request: Request, status: str = "", q: str = "", page: int = 1, s
             "reads": r["reads"], "last_read_at": r["last_read_at"], "last_ip": r["last_ip"],
             "created_at": r["created_at"], "expires_at": r["expires_at"],
             "note": r["note"], "card_type": r["card_type"],
+            "num_expire_at": (r["num_expire_at"] if "num_expire_at" in r.keys() else 0) or 0,
             "upstream_host": _upstream_label(up),
             "line": _line(r["phone"], r["token"]),
         })
@@ -627,7 +631,8 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
         return PlainTextResponse("error|relay_broken", status_code=500, headers=CORS)
     kw = (row["sms_keyword"] if "sms_keyword" in row.keys() else "") or ""
     pref = (row["sms_prefix"] if "sms_prefix" in row.keys() else "") or ""
-    good, why, text = await run_in_threadpool(_fetch, upstream, 15, kw)
+    meta = {}
+    good, why, text = await run_in_threadpool(_fetch, upstream, 15, kw, meta)
     if good and pref and upstream.startswith(("d1jiema:", "nexreg:")):
         # 只把属于该平台的短信交给买家：不匹配前缀且不含关键词 → 当作还没收到
         try:
@@ -636,6 +641,16 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
             body = t.split("|", 1)[1].strip() if ("|" in t and t.split("|", 1)[0].isdigit()) else t
             if t and t != "0|0" and not _nex_prefix_ok(body, pref) and not (kw and kw in t):
                 text = "0|0"
+        except Exception:
+            pass
+    exp = int(meta.get("expire_at") or 0)
+    if good and exp and 60 < exp - now <= 3 * 86400:
+        # 上游只在短信到达后才给 expiresTime；那一刻起用真实过期时间校准展示
+        try:
+            db.conn().execute("UPDATE relay_cards SET num_expire_at=? WHERE id=?", (exp, row["id"]))
+            from .providers import regular_note_ttl
+            created = int(row["created_at"] or now)
+            regular_note_ttl(row["country"] or "", max(1.0, (exp - created) / 60.0))
         except Exception:
             pass
     if not good:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Number providers: local pool, SMS-Activate, 5SIM, NexSMS premium."""
 from __future__ import annotations
-import json, os, random, re, threading, time, uuid
+import datetime, json, os, random, re, threading, time, uuid
 from typing import Optional
 
 import requests
@@ -1520,8 +1520,82 @@ def regular_buy(service: str = "go", country_id: int = 0, price: float = 0.0,
     raise last or ProviderError("取号失败，请稍后重试")
 
 
+def _parse_ts(raw) -> int:
+    t = str(raw or "").strip()[:19].replace("T", " ")
+    if not t:
+        return 0
+    try:
+        dt = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return 0
+    return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+
+
+def _plausible_expire(ts: int, now: float) -> int:
+    """上游时间串可能是 UTC 也可能是东八区：取最接近「约 20 分钟后」的那种解释。"""
+    if ts <= 0:
+        return 0
+    best, bestd = 0, 10 ** 9
+    for cand in (ts, ts - 8 * 3600):
+        d = cand - now
+        if 60 < d <= 3 * 86400:
+            score = abs(d - 1200)
+            if score < bestd:
+                best, bestd = cand, score
+    return best
+
+
+def _reg_ttl_default() -> int:
+    try:
+        return max(1, min(180, int(float(db.get_setting("reg_ttl_min", "20") or 20))))
+    except Exception:
+        return 20
+
+
+def _reg_ttl_stats() -> dict:
+    try:
+        d = json.loads(db.get_setting("nexreg_ttl_stats", "") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def regular_ttl_min(country: str = "") -> int:
+    """号码能用多久：有历史实测就取均值，没有就用后台默认值。"""
+    key = (country or "").strip().lower()
+    st = _reg_ttl_stats().get(key)
+    try:
+        n = int(st[0]); total = float(st[1])
+        if n >= 2 and total > 0:
+            return max(1, min(180, int(round(total / n))))
+    except Exception:
+        pass
+    return _reg_ttl_default()
+
+
+def regular_note_ttl(country: str, minutes: float) -> None:
+    """拿上游返回的真实过期时间校准「这类号能用多久」，样本越多估得越准。"""
+    key = (country or "").strip().lower()
+    try:
+        m = float(minutes)
+    except Exception:
+        return
+    if not key or m < 1 or m > 180:
+        return
+    st = _reg_ttl_stats()
+    try:
+        n = int((st.get(key) or [0, 0])[0]); total = float((st.get(key) or [0, 0])[1])
+    except Exception:
+        n, total = 0, 0.0
+    st[key] = [n + 1, total + m]
+    try:
+        db.set_setting("nexreg_ttl_stats", json.dumps(st))
+    except Exception:
+        pass
+
+
 def regular_sms(phone: str, service: str = "go") -> dict:
-    """取普通号码最新一条短信：{'code': 验证码, 'text': 正文, 'at': 时间}。"""
+    """取普通号码最新一条短信；顺带带出上游给出的过期时间（有才算）。"""
     num = re.sub(r"\D", "", phone or "")
     if len(num) < 6:
         raise ProviderError("号码格式不正确")
@@ -1531,10 +1605,13 @@ def regular_sms(phone: str, service: str = "go") -> dict:
     if isinstance(msg, list):
         msg = msg[-1] if msg else None
     if not isinstance(msg, dict):
-        return {"code": "", "text": "", "at": ""}
+        return {"code": "", "text": "", "at": "", "sms_at": 0, "expire_at": 0}
     return {"code": str(msg.get("code") or ""),
             "text": str(msg.get("text") or ""),
-            "at": str(msg.get("smsTime") or "")}
+            "at": str(msg.get("smsTime") or ""),
+            "sms_at": _parse_ts(msg.get("smsTime")),
+            "expire_at": _plausible_expire(_parse_ts(msg.get("expiresTime")), time.time())}
+
 
 
 def finish(number: dict, success: bool) -> None:

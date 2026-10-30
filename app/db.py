@@ -392,6 +392,7 @@ DEFAULTS = {
     "shop_max_orders_per_user": "0",
     "shop_stock_on": "1",
     "shop_register_need_code": "1",
+    "reg_ttl_min": "20",
 }
 
 
@@ -440,6 +441,8 @@ def init() -> None:
         _addcol('shop_products', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_products', 'service_code', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_products', 'country_id', "INTEGER NOT NULL DEFAULT 0")
+        _addcol('relay_cards', 'num_expire_at', "INTEGER NOT NULL DEFAULT 0")
+        _addcol('shop_orders', 'num_expire_at', "INTEGER NOT NULL DEFAULT 0")
         _addcol('shop_stock', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_stock', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
         try:

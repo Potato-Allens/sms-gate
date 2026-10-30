@@ -266,3 +266,37 @@
 .rc-buy{margin-top:-4px!important;font-size:12px;color:var(--dim)}
 .rc-buy a{color:#8df0cf;text-decoration:none;border-bottom:1px dashed #35e0b066}
 .rc-buy a:hover{color:#b6ffe8}
+
+/* ---------------- 购买二次确认（6 秒冷静期） */
+.sh-cfm{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:rgba(3,7,13,.76);backdrop-filter:blur(7px);animation:shCfmFade .16s ease-out}
+.sh-cfm-card{width:100%;max-width:560px;max-height:88vh;overflow:auto;border:1px solid var(--line-strong);
+  border-radius:20px;padding:20px 22px 18px;background:linear-gradient(180deg,#0e1726,#0a1120);
+  box-shadow:0 28px 80px #000c;animation:shCfmPop .2s ease-out}
+.sh-cfm-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.sh-cfm-head h3{margin:0;font-size:17px;line-height:1.35;color:#eaf6ff}
+.sh-cfm-x{background:none;border:0;color:#5d6b85;font-size:22px;line-height:1;cursor:pointer;padding:2px 6px}
+.sh-cfm-x:hover{color:#cfe0ff}
+.sh-cfm-prod{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 2px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:12px;background:#ffffff06;font-size:13px}
+.sh-cfm-prod b{color:#eaf6ff}
+.sh-cfm-prod span{color:var(--muted)}
+.sh-cfm-price{margin-left:auto;font-family:var(--mono);font-style:normal;color:#7ef0cf;font-size:15px}
+.sh-cfm-list{margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+.sh-cfm-list li{position:relative;padding-left:20px;font-size:12.5px;line-height:1.72;color:#9fb0c9}
+.sh-cfm-list li:before{content:"";position:absolute;left:4px;top:8px;width:6px;height:6px;border-radius:50%;
+  background:#ffb35c;box-shadow:0 0 0 3px #ffb35c22}
+.sh-cfm-list b{color:#e8cfae;font-weight:600}
+.sh-cfm-q{margin:14px 0 0;font-size:12.5px;color:#ffce8f}
+.sh-cfm-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.sh-cfm-acts .btn{min-width:132px;justify-content:center}
+.sh-cfm-acts .btn[disabled]{opacity:.42;filter:grayscale(.55);box-shadow:none;cursor:not-allowed}
+.sh-exp{margin-top:8px;font-size:12.5px;color:#ffd79b;letter-spacing:.01em}
+.sh-expcell{color:#c9a97a;font-size:11.5px;max-width:190px;word-break:break-all}
+@keyframes shCfmFade{from{opacity:0}to{opacity:1}}
+@keyframes shCfmPop{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+@media (max-width:560px){
+  .sh-cfm{padding:0;align-items:flex-end}
+  .sh-cfm-card{max-width:100%;border-radius:18px 18px 0 0;max-height:92vh}
+  .sh-cfm-acts .btn{flex:1;min-width:0}
+}

@@ -222,12 +222,100 @@
     });
   }
 
-  function buy(pid, btn) {
+  /* ------------------------------------------------------------ 购买二次确认（6 秒冷静期） */
+  function ttlText(exp) {
+    var e = Number(exp || 0);
+    if (!e) return "";
+    var now = Math.floor(Date.now() / 1000);
+    var left = e - now;
+    if (left <= 0) return "⏳ 号码已过期：上游已收回，收不到新的验证码了";
+    var mm = Math.floor(left / 60), ss = left % 60;
+    var d = new Date(e * 1000);
+    var hh = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+    var span = mm >= 60 ? Math.floor(mm / 60) + " 小时 " + (mm % 60) + " 分钟" : mm + " 分 " + ss + " 秒";
+    return "⏱ 号码可用至 " + hh + "（约剩 " + span + "）";
+  }
+
+  var CFM_PRODUCT = [
+    "<b>号码是实时向上游买的。</b>你点确认的那一刻，上游就已经扣了我们一个号的钱。",
+    "<b>号码会立刻显示给你，等于已经交付。</b>就算你一次都没用、平台也没发验证码，也<b>无法退款</b>。",
+    "<b>不能收回再卖。</b>上游的号码是一次性的，我们没办法把它退给上游再卖给下一个人，所以「没用过」不构成退款理由。",
+    "<b>唯一会退的是差价：</b>如果实际扣费低于页面价格，差额会原路退回你的余额。",
+    "<b>拿到号请马上用。</b>号码有有效期，过期后上游收回，就收不到新验证码了。"
+  ];
+  var CFM_STOCK = [
+    "<b>这是提前买好的现货。</b>上游的钱已经花出去了，卡密一发出去就等于交付。",
+    "<b>发出后无法退款，</b>也没办法再卖给别人——号码是一次性的，不能收回。",
+    "<b>唯一会退的是差价：</b>如果实际扣费低于页面价格，差额会原路退回你的余额。",
+    "<b>拿到号请马上用。</b>号码有有效期，过期后上游收回，就收不到新验证码了。"
+  ];
+
+  function confirmBuy(opt) {
+    opt = opt || {};
+    return new Promise(function (resolve) {
+      var old = document.getElementById("shCfm");
+      if (old) old.remove();
+      var list = opt.kind === "stock" ? CFM_STOCK : CFM_PRODUCT;
+      var wrap = document.createElement("div");
+      wrap.id = "shCfm";
+      wrap.className = "sh-cfm";
+      wrap.innerHTML =
+        '<div class="sh-cfm-card" role="dialog" aria-modal="true" aria-labelledby="shCfmTitle">' +
+          '<div class="sh-cfm-head"><h3 id="shCfmTitle">确认购买 · 号码一经发出不能退</h3>' +
+          '<button type="button" class="sh-cfm-x" data-cfm="no" aria-label="关闭">×</button></div>' +
+          '<div class="sh-cfm-prod"><b>' + esc(opt.name || "号码") + "</b>" +
+            (opt.meta ? "<span>" + esc(opt.meta) + "</span>" : "") +
+            (opt.price ? '<i class="sh-cfm-price">¥' + esc(opt.price) + "</i>" : "") + "</div>" +
+          '<ul class="sh-cfm-list">' + list.map(function (x) { return "<li>" + x + "</li>"; }).join("") +
+          "</ul>" +
+          '<p class="sh-cfm-q">确认平台、国家都选对了吗？点错就没法退了。</p>' +
+          '<div class="sh-cfm-acts">' +
+            '<button type="button" class="btn ghost" data-cfm="no">再想想</button>' +
+            '<button type="button" class="btn primary" data-cfm="yes" id="shCfmYes" disabled>请先阅读（6）</button>' +
+          "</div>" +
+        "</div>";
+      document.body.appendChild(wrap);
+      var btn = wrap.querySelector("#shCfmYes");
+      var left = 6;
+      btn.textContent = "请先阅读（" + left + "）";
+      var timer = setInterval(function () {
+        left--;
+        if (left <= 0) {
+          clearInterval(timer);
+          btn.disabled = false;
+          btn.textContent = "确认购买";
+        } else {
+          btn.textContent = "请先阅读（" + left + "）";
+        }
+      }, 1000);
+      function onKey(e) { if (e.key === "Escape") close(false); }
+      function close(v) {
+        clearInterval(timer);
+        document.removeEventListener("keydown", onKey);
+        if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        resolve(!!v);
+      }
+      document.addEventListener("keydown", onKey);
+      wrap.addEventListener("click", function (e) {
+        var t = e.target.closest("[data-cfm]");
+        if (t) { close(t.dataset.cfm === "yes"); return; }
+        if (e.target === wrap) close(false);
+      });
+    });
+  }
+
+  async function buy(pid, btn) {
     if (!STATE.user) {
       toast("请先登录再购买", "bad");
       setTimeout(function () { location.href = "/shop/login?next=/shop"; }, 700);
       return;
     }
+    if (STATE.busy) return;
+    var p = (STATE.all || []).filter(function (x) { return String(x.id) === String(pid); })[0] || {};
+    var meta = [(p.flag || ""), (p.cate_name || ""), (p.card_type || "")].filter(Boolean).join(" · ");
+    if (Number(p.success) > 0) meta += " · 成功率 " + p.success + "%";
+    var yes = await confirmBuy({ name: p.name || "号码", price: p.price || "", meta: meta });
+    if (!yes) return;
     if (STATE.busy) return;
     STATE.busy = true;
     if (btn) { btn.disabled = true; btn.textContent = "发货中…"; }
@@ -277,6 +365,7 @@
     var zone = $("stockZone"), grid = $("stockGrid");
     if (!zone || !grid) return;
     var list = groups || [];
+    STATE.stock = list;
     if (!list.length) { zone.classList.add("hidden"); grid.innerHTML = ""; return; }
     zone.classList.remove("hidden");
     grid.innerHTML = list.map(stockCardHtml).join("");
@@ -288,12 +377,25 @@
     });
   }
 
-  function buyStock(btn) {
+  async function buyStock(btn) {
     if (!STATE.user) {
       toast("请先登录再购买", "bad");
       setTimeout(function () { location.href = "/shop/login?next=/shop"; }, 700);
       return;
     }
+    if (STATE.busy) return;
+    var g = null;
+    for (var i = 0; i < (STATE.stock || []).length; i++) {
+      if (STATE.stock[i].cate_name === btn.dataset.cate &&
+          (STATE.stock[i].card_type || "") === (btn.dataset.ctype || "")) { g = STATE.stock[i]; break; }
+    }
+    var yes = await confirmBuy({
+      kind: "stock",
+      name: (btn.dataset.cate || "现货卡密") + (btn.dataset.ctype ? " · " + btn.dataset.ctype : ""),
+      price: g ? g.price : "",
+      meta: "现货直发 · 售出不退"
+    });
+    if (!yes) return;
     if (STATE.busy) return;
     STATE.busy = true;
     var old = btn.textContent;
@@ -329,7 +431,9 @@
     div.style.borderColor = "#35e0b055";
     div.style.background = "#35e0b010";
     div.style.color = "#b9f7e6";
+    var expTxt = ttlText(o.expire_at);
     div.innerHTML = "下单成功 · " + esc(o.name || "") + " · " + esc(o.phone || "") +
+      (expTxt ? '<div class="sh-exp">' + esc(expTxt) + "</div>" : "") +
       '<div style="margin-top:8px;font-family:var(--mono);font-size:12px;word-break:break-all">' +
       esc(o.link || "") + "</div>" +
       '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
@@ -410,7 +514,7 @@
     var body = $("orderBody");
     if (!body) return;
     if (!list.length) {
-      body.innerHTML = '<tr><td colspan="7" class="mono">还没有购买记录，去商城选一个平台试试。</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="mono">还没有购买记录，去商城选一个平台试试。</td></tr>';
       return;
     }
     body.innerHTML = list.map(function (o) {
@@ -421,9 +525,11 @@
       var op = link
         ? '<button class="btn tiny" data-copy="' + esc(link) + '">复制</button>'
         : '<span class="mono">—</span>';
+      var expTxt2 = ttlText(o.expire_at);
       return "<tr><td class='mono'>" + fmt(o.created_at) + "</td><td>" + esc(o.name) +
         (o.card_type ? ' <span class="sh-tag">' + esc(o.card_type) + "</span>" : "") +
-        "</td><td class='mono'>" + esc(o.phone || "—") + "</td><td class='mono'>¥" +
+        "</td><td class='mono'>" + esc(o.phone || "—") + "</td><td class='mono sh-expcell'>" +
+        (expTxt2 ? esc(expTxt2) : "—") + "</td><td class='mono'>¥" +
         esc(o.price) + "</td><td>" + statusHtml(o.status) + "</td><td>" + cell +
         "</td><td>" + op + "</td></tr>";
     }).join("");
