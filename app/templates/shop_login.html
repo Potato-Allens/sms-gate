@@ -7,7 +7,7 @@
 <title>{{ site_name }} · 登录 / 注册</title>
 <link rel="stylesheet" href="/static/style.css?v=20261024i">
 <link rel="stylesheet" href="/static/landing.css?v=20261024i">
-<link rel="stylesheet" href="/static/shop.css?v=20261030e">
+<link rel="stylesheet" href="/static/shop.css?v=20261030f">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1220'/%3E%3Cpath d='M18 34l9 9 19-22' stroke='%2334e0b0' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body class="pub lp sh" data-page="login">
@@ -36,6 +36,11 @@
         <button id="tabReg" type="button">注册</button>
       </div>
 
+      <div class="sh-buybar">
+        <div><b>还没有充值码？</b><span>最低 ¥5 起充，支付后立刻拿到充值码</span></div>
+        <a class="btn primary sm" href="{{ rcode_url }}" target="_blank" rel="noopener">去购买充值码</a>
+      </div>
+
       <form id="loginForm" class="sh-form" autocomplete="on">
         <label>账号<input id="lgUser" name="username" type="text" autocomplete="username"
           placeholder="4-20 位字母 / 数字 / 下划线" required></label>
@@ -46,7 +51,7 @@
       </form>
 
       <form id="regForm" class="sh-form" autocomplete="on" style="display:none">
-        <label>充值码（必填）<input id="rgCode" name="code" type="text" autocomplete="off"
+        <label>充值码（必填）<a class="lab-link" href="{{ rcode_url }}" target="_blank" rel="noopener">还没有？去购买</a><input id="rgCode" name="code" type="text" autocomplete="off"
           placeholder="SG-XXXX-XXXX-XXXX-XXXX" maxlength="32" required></label>
         <label>账号<input id="rgUser" name="username" type="text" autocomplete="username"
           placeholder="4-20 位字母 / 数字 / 下划线" required></label>
@@ -65,7 +70,7 @@
     </section>
 
     <aside class="sh-auth-side">
-      <div class="li"><b>01</b><span>先购买充值码 → 注册时填写，金额直接进余额；余额永久有效。</span></div>
+      <div class="li"><b>01</b><span>先去购买充值码（最低 ¥5 起充）→ 注册时填写，金额直接进余额；余额永久有效。</span></div>
       <div class="li"><b>02</b><span>在商城选运营商与卡类型，按平台成功率与价格下单。</span></div>
       <div class="li"><b>03</b><span>下单后立即拿到直链卡密：卡号:手机号----接码地址，可反复刷新取码。</span></div>
       <div class="li"><b>04</b><span>购买记录与接码地址都保存在个人中心，换设备也能找回。</span></div>
@@ -74,6 +79,6 @@
 </main>
 
 <div id="toast" class="toast"></div>
-<script src="/static/shop.js?v=20261030e"></script>
+<script src="/static/shop.js?v=20261030f"></script>
 </body>
 </html>

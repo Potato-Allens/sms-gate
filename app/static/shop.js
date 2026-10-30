@@ -70,11 +70,14 @@
     STATE.user = u;
     var nav = $("navUser");
     if (nav) {
-      nav.innerHTML = u
+      var rc = document.body.dataset.rcodeUrl || "";
+      var rcBtn = rc ? ('<a class="btn ghost sm" href="' + esc(rc) +
+                        '" target="_blank" rel="noopener">购买充值码</a>') : "";
+      nav.innerHTML = rcBtn + (u
         ? '<a class="btn ghost sm" href="/shop/me">' + esc(u.username) + " · ¥" + esc(u.balance) +
           '</a><a class="btn primary sm" href="/shop">继续选购</a>'
         : '<a class="btn ghost sm" href="/shop/login">登录</a>' +
-          '<a class="btn primary sm" href="/shop/login#reg">注册</a>';
+          '<a class="btn primary sm" href="/shop/login#reg">注册</a>');
     }
     var wv = $("walletVal"), wn = $("walletNote");
     if (wv) wv.textContent = u ? u.balance : "—";
@@ -201,9 +204,11 @@
         STATE.busy = false;
         if (!d.ok) {
           if (d._status === 401) { location.href = "/shop/login"; return; }
-          toast(d.error || "下单失败", "bad");
+          toast(d._status === 402
+            ? "余额不足，请先购买充值码（最低 ¥5 起充）"
+            : (d.error || "下单失败"), "bad");
           if (d._status === 402) {
-            setTimeout(function () { location.href = "/shop/me"; }, 900);
+            setTimeout(function () { location.href = "/shop/me"; }, 1100);
           }
           if (btn) { btn.disabled = false; btn.textContent = "购买"; }
           return;

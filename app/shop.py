@@ -853,7 +853,8 @@ def _ac(request: Request, s: dict, body: dict) -> None:
 SHOP_SETTING_KEYS = ("shop_on", "shop_register_on", "shop_usd_cny", "shop_markup_pct",
                      "shop_allow_oos", "shop_order_days", "shop_buy_per_hour",
                      "shop_min_recharge", "shop_sync_cates", "shop_sync_pages",
-                     "shop_max_orders_per_user", "shop_stock_on", "shop_register_need_code")
+                     "shop_max_orders_per_user", "shop_stock_on", "shop_register_need_code",
+                     "shop_url", "shop_rcode_url")
 
 
 @admin_router.get("/api/shop/overview")

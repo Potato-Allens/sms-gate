@@ -1071,6 +1071,8 @@
       '<label class="fld">每人每小时下单上限<input name="shop_buy_per_hour" value="' + esc(s.shop_buy_per_hour || "20") + '"></label>' +
       '<label class="fld">同步每个分类页数<input name="shop_sync_pages" value="' + esc(s.shop_sync_pages || "1") + '"></label>' +
       '<label class="fld full">只同步这些分类（留空=全部；可填分类 ID 或名称，逗号分隔）<input name="shop_sync_cates" value="' + esc(s.shop_sync_cates || "") + '" placeholder="例如 美国(实卡),英国卡"></label>' +
+      '<label class="fld">充值码购买链接（商城/登录/注册/个人中心的「去购买」按钮）<input name="shop_rcode_url" value="' + esc(s.shop_rcode_url || "https://wzyp.cn/item/dk067f") + '"></label>' +
+      '<label class="fld">官网「购买号码」链接<input name="shop_url" value="' + esc(s.shop_url || "https://wzyp.cn/shop/63EZ1CJK") + '"></label>' +
       '<div class="fld full"><button class="btn primary" type="submit">保存设置</button></div>' +
       "</div></form>" +
 
@@ -1111,7 +1113,7 @@
       const body = {};
       ["shop_on", "shop_register_on", "shop_usd_cny", "shop_markup_pct", "shop_allow_oos",
        "shop_order_days", "shop_buy_per_hour", "shop_sync_pages", "shop_sync_cates",
-       "shop_stock_on", "shop_register_need_code"].forEach((k) => {
+       "shop_stock_on", "shop_register_need_code", "shop_url", "shop_rcode_url"].forEach((k) => {
         if (f[k]) body[k] = f[k].value;
       });
       const d = await api("/admin/api/shop/settings", { method: "POST", body });

@@ -142,6 +142,7 @@ def render(name: str, request: Request, **ctx) -> HTMLResponse:
         "note": db.get_setting("site_note", ""),
         "poll_interval": db.get_setting("poll_interval", "15"),
         "shop_url": db.get_setting("shop_url", "https://wzyp.cn/shop/63EZ1CJK"),
+        "rcode_url": db.get_setting("shop_rcode_url", "https://wzyp.cn/item/dk067f"),
         "year": time.strftime("%Y"),
     }
     base.update(ctx)
