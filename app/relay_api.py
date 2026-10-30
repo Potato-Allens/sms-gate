@@ -143,6 +143,19 @@ def url_problem(url: str) -> str:
     return _host_ok(host, port)
 
 
+def _upstream_label(up: str) -> str:
+    if not up:
+        return "—"
+    if up.startswith("d1jiema:"):
+        return "d1jiema"
+    if up.startswith("nexreg:"):
+        return "NexSMS 普通号"
+    try:
+        return urlparse(up).hostname or "—"
+    except Exception:
+        return "—"
+
+
 def parse_line(line: str):
     s = (line or "").strip().strip("\ufeff")
     if not s or s.startswith("#"):
@@ -204,6 +217,17 @@ def _fetch(url: str, timeout: int = 15, kw: str = ""):
             phone = parts[1] if len(parts) > 1 else ""
             text = d1jiema.clean(d1jiema.get_msg(phone, kw or ""))
             return True, "", (text or "0|0")
+        except Exception:
+            return False, "upstream_unreachable", ""
+    if url.startswith("nexreg:"):
+        from . import providers
+        try:
+            parts = url.split(":", 2)
+            svc = parts[1] if len(parts) > 1 and parts[1] else "go"
+            phone = parts[2] if len(parts) > 2 else ""
+            r = providers.regular_sms(phone, svc)
+            body = (r.get("text") or "").strip()
+            return True, "", (("1|" + body) if body else "0|0")
         except Exception:
             return False, "upstream_unreachable", ""
     cur = url
@@ -472,7 +496,7 @@ def relay_list(request: Request, status: str = "", q: str = "", page: int = 1, s
             "reads": r["reads"], "last_read_at": r["last_read_at"], "last_ip": r["last_ip"],
             "created_at": r["created_at"], "expires_at": r["expires_at"],
             "note": r["note"], "card_type": r["card_type"],
-            "upstream_host": ("d1jiema" if up.startswith("d1jiema:") else (urlparse(up).hostname or "—")) if up else "—",
+            "upstream_host": _upstream_label(up),
             "line": _line(r["phone"], r["token"]),
         })
     return {"ok": True, "total": total, "page": page, "items": items, "now": now}
@@ -604,12 +628,13 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
     kw = (row["sms_keyword"] if "sms_keyword" in row.keys() else "") or ""
     pref = (row["sms_prefix"] if "sms_prefix" in row.keys() else "") or ""
     good, why, text = await run_in_threadpool(_fetch, upstream, 15, kw)
-    if good and pref and upstream.startswith("d1jiema:"):
+    if good and pref and upstream.startswith(("d1jiema:", "nexreg:")):
         # 只把属于该平台的短信交给买家：不匹配前缀且不含关键词 → 当作还没收到
         try:
             from .providers import _nex_prefix_ok
             t = (text or "").strip()
-            if t and t != "0|0" and not _nex_prefix_ok(t, pref) and not (kw and kw in t):
+            body = t.split("|", 1)[1].strip() if ("|" in t and t.split("|", 1)[0].isdigit()) else t
+            if t and t != "0|0" and not _nex_prefix_ok(body, pref) and not (kw and kw in t):
                 text = "0|0"
         except Exception:
             pass

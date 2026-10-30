@@ -438,6 +438,8 @@ def init() -> None:
         _addcol('relay_cards', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_products', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_products', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_products', 'service_code', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_products', 'country_id', "INTEGER NOT NULL DEFAULT 0")
         _addcol('shop_stock', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_stock', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
         try:

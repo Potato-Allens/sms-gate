@@ -129,6 +129,19 @@ def country_of(cate_name: str, name: str = "") -> str:
     return ""
 
 
+def flag_of(country: str) -> str:
+    """国旗：已知的用表，未知的按 ISO2 现算（避免每加一个国家都要改表）。"""
+    c = (country or "").strip().lower()
+    if c in FLAGS:
+        return FLAGS[c]
+    if len(c) == 2 and c.isalpha():
+        try:
+            return "".join(chr(0x1F1E6 + ord(ch) - 97) for ch in c)
+        except Exception:
+            pass
+    return "🌐"
+
+
 def type_name(ptype) -> str:
     try:
         return TYPE_NAMES.get(int(ptype), "")
@@ -214,7 +227,7 @@ def user_public(u) -> dict:
             "balance": money(u["balance_cents"])}
 # ------------------------------------------------------------------ 商品
 def _product_row(p) -> dict:
-    flag = FLAGS.get(p["country"] or "", "🌐")
+    flag = flag_of(p["country"] or "")
     country = p["country"] or ""
     ctype = p["card_type"] or type_name(p["ptype"])
     note = p["note"] or ""
@@ -243,6 +256,8 @@ def _product_row(p) -> dict:
         "provider": (p["provider"] if "provider" in p.keys() else "nexsms") or "nexsms",
         "sms_keyword": (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or "",
         "sms_prefix": (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or "",
+        "service_code": (p["service_code"] if "service_code" in p.keys() else "") or "",
+        "country_id": (p["country_id"] if "country_id" in p.keys() else 0) or 0,
     }
 
 
@@ -297,12 +312,20 @@ def catalog_meta() -> dict:
     rows = db.q("SELECT DISTINCT cate_name, country FROM shop_products WHERE enabled=1")
     regions = []
     seen = set()
+    multi = {}
     for r in rows:
         key = r["cate_name"] or r["country"]
-        if not key or key in seen:
+        if not key:
+            continue
+        multi.setdefault(key, set()).add((r["country"] or "").strip())
+        if key in seen:
             continue
         seen.add(key)
-        regions.append({"key": key, "label": key, "flag": FLAGS.get(r["country"] or "", "🌐")})
+        regions.append({"key": key, "label": key, "flag": flag_of(r["country"] or "")})
+    for reg in regions:
+        # 一个分类横跨多个国家（例如「普通号 · Google」）时用地球图标，别误导成单个国旗
+        if len(multi.get(reg["key"]) or ()) > 1:
+            reg["flag"] = "🌐"
     types = []
     for r in db.q("SELECT DISTINCT card_type FROM shop_products WHERE enabled=1"):
         if r["card_type"] and r["card_type"] not in types:
@@ -726,6 +749,8 @@ def _buy_upstream(p) -> dict:
         prov = str(p["provider"] or "")
     except Exception:
         prov = ""
+    if prov == "nexsms_regular":
+        return _buy_regular(p)
     if prov == "d1jiema" or (p["country"] or "") == "cn":
         return _buy_cn(p)
     payload = {
@@ -747,6 +772,37 @@ def _buy_upstream(p) -> dict:
             phone = tel if tel.startswith("+") else "+" + tel.lstrip("+")
             return {"phone": phone, "upstream": url}
     raise ShopError("上游暂无库存，请稍后重试或换一个平台", 503)
+
+
+def _buy_regular(p) -> dict:
+    """普通号码（NexSMS activate）：按「项目 + 国家」买 1 个号，取码走本站转发。"""
+    try:
+        svc = str(p["service_code"] or "go")
+    except Exception:
+        svc = "go"
+    try:
+        cid = int(p["country_id"] or 0)
+    except Exception:
+        cid = 0
+    if cid <= 0:
+        raise ShopError("商品配置异常，请联系客服", 500)
+    price = 0.0
+    try:
+        cat = providers.regular_by_country(svc, cid)
+    except Exception:
+        cat = None
+    if cat:
+        price = float(cat.get("price_usd") or 0)
+    if price <= 0:
+        try:
+            price = float(p["upstream_price_usd"] or 0)
+        except Exception:
+            price = 0.0
+    phone = providers.regular_buy(svc, cid, price, 1)
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        raise ShopError("上游返回的号码异常，请重试", 502)
+    return {"phone": "+" + digits, "upstream": "nexreg:%s:%s" % (svc, digits)}
 
 
 def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
@@ -983,6 +1039,8 @@ def adm_products(request: Request, q: str = "", status: str = "all", page: int =
         d["app_id"] = r["app_id"]
         d["ptype"] = r["ptype"]
         d["sort"] = r["sort"]
+        d["service_code"] = (r["service_code"] if "service_code" in r.keys() else "") or ""
+        d["country_id"] = (r["country_id"] if "country_id" in r.keys() else 0) or 0
         out.append(d)
     return ok(products=out, total=int(total), page=page, size=size)
 
@@ -1090,6 +1148,119 @@ async def adm_product_delete(request: Request):
     security.audit("shop_product_delete", "alert", ip=_ip(request), actor=s["username"],
                    detail={"id": pid})
     return ok()
+
+
+# ------------------------------------------------- 普通号码（NexSMS activate）
+REG_SERVICES = providers.REG_SERVICES
+
+
+def _reg_label(svc: str) -> str:
+    for code, label in REG_SERVICES:
+        if code == svc:
+            return label.split(",")[0]
+    return svc or "普通号"
+
+
+def _reg_plan(service: str, force: bool = False) -> list:
+    """映射成商城商品：只保留有成功率的国家。"""
+    rate = float(db.get_setting("shop_usd_cny", "7.20") or 7.2)
+    markup = float(db.get_setting("shop_markup_pct", "40") or 40)
+    label = _reg_label(service)
+    out = []
+    for r in providers.regular_catalog(service, force=force):
+        if r["success"] <= 0:
+            continue
+        usd = float(r["price_usd"] or 0)
+        out.append({
+            "country_id": r["country_id"],
+            "name_chn": r["name_chn"] or r["name"],
+            "iso": r["iso"] or "",
+            "phone_code": r["phone_code"],
+            "success": r["success"],
+            "usd": usd,
+            "stock": int(r["stock"]),
+            "available": bool(r["available"]),
+            "name": ("%s · %s" % (label, r["name_chn"] or r["name"]))[:60],
+            # 分类只按「项目」聚合：不然 40 个国家会把商城地区筛选塞满
+            "cate_name": ("普通号 · " + label)[:40],
+            "price_cents": _round_price(usd * rate * (1.0 + markup / 100.0) * 100),
+            "app_id": -(10000 + int(r["country_id"])),
+        })
+    return out
+
+
+@admin_router.get("/api/shop/regular/catalog")
+def adm_reg_catalog(request: Request, service: str = "go", refresh: int = 0,
+                    all: int = 0):
+    _admin(request)
+    svc = (service or "go").strip()[:8] or "go"
+    try:
+        prov = _reg_plan(svc, force=bool(int(refresh or 0)))
+    except providers.ProviderBusy as e:
+        return err(str(e), 503, retry_after=getattr(e, "retry_after", 8))
+    except providers.ProviderError as e:
+        return err(str(e), 502)
+    if not int(all or 0):
+        prov = [p for p in prov if p["success"] > 0]
+    rows = db.q("SELECT id,country_id,enabled,price_cents FROM shop_products "
+                "WHERE provider='nexsms_regular' AND service_code=?", (svc,))
+    used = {int(r["country_id"] or 0): r for r in rows}
+    out = []
+    for p in prov:
+        ex = used.get(p["country_id"])
+        out.append(dict(p, product_id=(ex["id"] if ex else 0),
+                        enabled=(int(ex["enabled"]) if ex else 0),
+                        price=(money(ex["price_cents"]) if ex else "")))
+    out.sort(key=lambda r: (-(r["success"] or 0), r["usd"] or 0))
+    return ok(service=svc, total=len(out), list=out,
+              services=[{"code": c, "label": l} for c, l in REG_SERVICES],
+              rate=float(db.get_setting("shop_usd_cny", "7.20") or 7.2))
+
+
+@admin_router.post("/api/shop/regular/sync")
+async def adm_reg_sync(request: Request):
+    s = _admin(request)
+    body = await _body(request)
+    _ac(request, s, body)
+    svc = str(body.get("service") or "go").strip()[:8] or "go"
+    try:
+        plan = _reg_plan(svc, force=True)
+    except providers.ProviderBusy as e:
+        return err(str(e), 503, retry_after=getattr(e, "retry_after", 8))
+    except providers.ProviderError as e:
+        return err(str(e), 502)
+    plan = [p for p in plan if p["success"] > 0]
+    if not plan:
+        return err("上游暂无有成功率的国家")
+    now = int(time.time())
+    added = updated = 0
+    with db.tx() as c:
+        for p in plan:
+            ex = c.execute("SELECT id FROM shop_products WHERE provider='nexsms_regular' "
+                           "AND service_code=? AND country_id=?",
+                           (svc, p["country_id"])).fetchone()
+            if ex:
+                # 只刷新上游数据，绝不动管理员定好的售价与上下架状态
+                c.execute("UPDATE shop_products SET app_id=?,name=?,cate_name=?,country=?,"
+                          "card_type='普通号',upstream_price_usd=?,success=?,stock=?,"
+                          "updated_at=? WHERE id=?",
+                          (p["app_id"], p["name"], p["cate_name"], p["iso"],
+                           p["usd"], p["success"], p["stock"], now, ex["id"]))
+                updated += 1
+            else:
+                c.execute("INSERT INTO shop_products(app_id,ptype,name,icon,cate_id,cate_name,"
+                          "country,card_type,upstream_price_usd,success,stock,price_cents,"
+                          "enabled,sort,note,created_at,updated_at,provider,service_code,"
+                          "country_id) VALUES(?,1,?,?,0,?,?,'普通号',?,?,?,?,1,0,'',?,?,"
+                          "'nexsms_regular',?,?)",
+                          (p["app_id"], p["name"], icon_for(p["name"]), p["cate_name"],
+                           p["iso"], p["usd"], p["success"], p["stock"], p["price_cents"],
+                           now, now, svc, p["country_id"]))
+                added += 1
+    security.audit("shop_regular_sync", "alert", ip=_ip(request), actor=s["username"],
+                   detail={"service": svc, "added": added, "updated": updated})
+    return ok(service=svc, added=added, updated=updated, total=len(plan),
+              rate=float(db.get_setting("shop_usd_cny", "7.20") or 7.2))
 
 
 SYNC = {"running": False, "started": 0, "done": 0, "total": 0, "found": 0,

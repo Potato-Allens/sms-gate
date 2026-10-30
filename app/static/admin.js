@@ -1046,6 +1046,7 @@
     if (!ov.ok) { content.innerHTML = '<div class="empty">' + esc(ov.error) + "</div>"; return; }
     const s = cf.settings || {};
     S.shopRate = Number(s.shop_usd_cny || 7.2) || 7.2;
+    S.shopMarkup = Number(s.shop_markup_pct || 40) || 40;
     const on = (v) => (String(v) === "1" ? " selected" : "");
     const sel = (val, cur) => (String(val) === String(cur) ? " selected" : "");
     content.innerHTML =
@@ -1098,6 +1099,21 @@
       "</form></div>" +
 
       '<div class="card mt18">' +
+      '<div class="card-title"><h3>普通号码（按成功率）</h3><span class="hint">' +
+      '只列上游<b>有成功率</b>的国家；导入后用户下单 → 自动取号 → 生成 卡号:手机号----本站接码直链，密钥不出服务器</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<select id="regService">' +
+      [["go", "Google,youtube,Gmail"], ["wa", "Whatsapp"], ["tg", "Telegram"],
+       ["ig", "Instagram+Threads"], ["fb", "facebook"], ["am", "Amazon"]]
+        .map(function (x) { return '<option value="' + x[0] + '">' + x[1] + "</option>"; }).join("") +
+      "</select>" +
+      '<button class="btn" type="button" data-act="shop-reg-load">刷新上游目录</button>' +
+      '<button class="btn primary" type="button" data-act="shop-reg-import">导入 / 更新到商城</button>' +
+      '<span class="help" id="regStat">未加载</span></div>' +
+      '<div class="mt12" id="regTable"></div></div>' +
+
+
+      '<div class="card mt18">' +
       '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价框里是<b>上次保存</b>的价格，框下小字是建议价（USD × 汇率）；改动会亮橙色边框，可单行保存或一键保存全部</span></div>' +
       '<div class="row gap10 wrap mt8">' +
       '<input id="shopQ" placeholder="搜索平台 / 分类" value="' + esc(st.q) + '" style="max-width:260px">' +
@@ -1136,6 +1152,43 @@
     });
     loadShopProducts();
     refreshSync();
+  }
+
+  async function loadRegCatalog(refresh) {
+    const box = $("regTable");
+    if (!box) return;
+    const svcEl = $("regService");
+    const svc = svcEl ? svcEl.value : "go";
+    box.innerHTML = '<div class="loading">读取上游目录…</div>';
+    const d = await api("/admin/api/shop/regular/catalog?service=" + encodeURIComponent(svc) +
+      (refresh ? "&refresh=1" : ""));
+    if (!d.ok) {
+      box.innerHTML = '<div class="empty">' + esc(d.error || "读取失败") + "</div>";
+      if ($("regStat")) $("regStat").textContent = "读取失败";
+      return;
+    }
+    const rate = Number(d.rate || S.shopRate || 7.2) || 7.2;
+    const mk = 1 + (Number(S.shopMarkup || 40) || 40) / 100;
+    if ($("regStat")) {
+      $("regStat").textContent = "共 " + d.total + " 个有成功率的国家 · 汇率 " + rate +
+        " × 加价 " + Math.round((mk - 1) * 100) + "%";
+    }
+    const rows = (d.list || []).map(function (r) {
+      const sug = (Number(r.usd || 0) * rate * mk).toFixed(2);
+      const st = r.product_id
+        ? (r.enabled ? badge("在售 ¥" + r.price, "g") : badge("已下架 ¥" + r.price, ""))
+        : badge("未导入", "");
+      return "<tr><td><b>" + esc(r.name_chn || r.name) + "</b><div class='mono small'>" +
+        esc(r.name) + "</div></td><td class='mono'>" + esc(r.phone_code || "") +
+        "</td><td class='mono'>" + esc(r.success) + "%</td><td class='mono'>$" +
+        Number(r.usd || 0).toFixed(4) + "</td><td class='mono'>¥" + sug +
+        "</td><td class='mono'>" + Number(r.stock || 0) + "</td><td>" + st + "</td></tr>";
+    }).join("");
+    box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>国家 / 运营商</th><th>区号</th>' +
+      "<th>成功率</th><th>最低价 USD</th><th>建议售价</th><th>库存</th><th>商城</th>" +
+      "</tr></thead><tbody>" +
+      (rows || "<tr><td colspan=7 class='empty'>上游暂无有成功率的国家</td></tr>") +
+      "</tbody></table></div>";
   }
 
   async function loadShopProducts() {
@@ -1686,6 +1739,20 @@
       const d = await api("/admin/api/shop/product/delete", { method: "POST", body: { id } });
       toast(d.ok ? "已删除" : (d.error || "删除失败"), d.ok ? "good" : "bad");
       return d.ok && loadShopProducts();
+    }
+    if (act === "shop-reg-load") {
+      await loadRegCatalog(true);
+      return;
+    }
+    if (act === "shop-reg-import") {
+      const svc = ($("regService") || {}).value || "go";
+      el.disabled = true;
+      const d = await api("/admin/api/shop/regular/sync", { method: "POST", body: { service: svc } });
+      el.disabled = false;
+      toast(d.ok ? ("已导入 " + d.total + " 个国家（新增 " + d.added + " / 更新 " + d.updated + "）")
+                 : (d.error || "导入失败"), d.ok ? "good" : "bad");
+      if (d.ok) { loadRegCatalog(false); loadShopProducts(); }
+      return;
     }
     if (act === "shop-sync") {
       const d = await api("/admin/api/shop/sync", { method: "POST", body: {} });

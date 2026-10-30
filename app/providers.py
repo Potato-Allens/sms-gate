@@ -1308,6 +1308,235 @@ def _poll_d1jiema(number: dict) -> dict:
     return out
 
 
+# ------------------------------------------- 普通号码（regular / activate 渠道）
+# 面板侧目录接口（user.nexsms.net）本身是公开的：不带 apiKey 也能读到，
+# 所以前端/后台永远不会看到密钥，密钥只在服务端下单时使用。
+REG_SERVICES = [("go", "Google,youtube,Gmail"), ("wa", "Whatsapp"), ("tg", "Telegram"),
+                ("ig", "Instagram+Threads"), ("fb", "facebook"), ("am", "Amazon")]
+
+# 上游国家名 -> ISO2，只用于商城展示国旗 / 地区筛选
+REG_ISO = {
+    "ukraine": "ua", "philippines": "ph", "indonesia": "id", "malaysia": "my",
+    "kenya": "ke", "vietnam": "vn", "israel": "il", "hong kong": "hk",
+    "poland": "pl", "united kingdom": "gb", "egypt": "eg", "ireland": "ie",
+    "cambodia": "kh", "south africa": "za", "colombia": "co", "estonia": "ee",
+    "canada": "ca", "argentina": "ar", "cameroon": "cm", "germany": "de",
+    "croatia": "hr", "sweden": "se", "netherlands": "nl", "thailand": "th",
+    "mexico": "mx", "spain": "es", "turkey": "tr", "czech": "cz",
+    "new zealand": "nz", "brazil": "br", "angola": "ao", "france": "fr",
+    "italy": "it", "portugal": "pt", "chile": "cl", "australia": "au",
+    "japan": "jp", "usa": "us", "singapore": "sg", "malta": "mt",
+}
+
+REG_CAT_TTL = 600
+_REG_CAT = {}
+_REG_CAT_LOCK = threading.Lock()
+_REG_TIER = {}
+_REG_TIER_LOCK = threading.Lock()
+
+
+def _nex_ui_base() -> str:
+    """面板侧主机（普通号码目录 + 取码都走 api 主机，目录在 user 主机）。"""
+    raw = (db.get_setting("nexsms_ui_base", "") or "").strip().rstrip("/")
+    if raw:
+        return raw
+    b = _nex_base()
+    return b.replace("//api.", "//user.", 1) if "//api." in b else "https://user.nexsms.net"
+
+
+def _ui_get(path: str, params: dict, timeout: int = 25):
+    """公开目录接口：不带 apiKey，避免把密钥交出去。"""
+    px = _nex_proxy()
+    proxies = {"http": px, "https": px} if px else None
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    with _NEX_HTTP_LOCK:
+        gap = 0.15 - (time.time() - _NEX_LAST_HTTP[0])
+        if gap > 0:
+            time.sleep(gap)
+        try:
+            r = S.get(_nex_ui_base() + path, params=params, headers=headers,
+                      timeout=timeout, proxies=proxies)
+        except Exception as e:
+            raise ProviderError("普通号目录请求失败: %s" % type(e).__name__)
+        _NEX_LAST_HTTP[0] = time.time()
+    if r.status_code == 429:
+        raise ProviderBusy("上游目录限流，请稍后重试", retry_after=10)
+    try:
+        d = r.json()
+    except Exception:
+        raise ProviderError("普通号目录返回格式异常（HTTP %d）" % r.status_code)
+    try:
+        code = int(d.get("code") or 0)
+    except Exception:
+        code = -1
+    if code != 0:
+        raise ProviderError("普通号目录: %s" % str(d.get("message") or "")[:80])
+    return d.get("data")
+
+
+def regular_catalog(service: str = "go", force: bool = False) -> list:
+    """普通号码国家目录（含成功率），进程内 + 数据库两级缓存，默认 10 分钟。"""
+    svc = (service or "go").strip()[:8] or "go"
+    now = time.time()
+    with _REG_CAT_LOCK:
+        hit = _REG_CAT.get(svc)
+        if hit and not force and now - hit[0] < REG_CAT_TTL:
+            return hit[1]
+    cache_key = "nexreg_cat_" + svc
+    if not force:
+        try:
+            raw = db.get_setting(cache_key, "")
+            if raw:
+                c = json.loads(raw)
+                if now - float(c.get("ts") or 0) < REG_CAT_TTL and c.get("list"):
+                    out = [x for x in c["list"] if isinstance(x, dict)]
+                    with _REG_CAT_LOCK:
+                        _REG_CAT[svc] = (float(c.get("ts") or 0), out)
+                    return out
+        except Exception:
+            pass
+    data = _ui_get("/api/activate/get-top-countries-by-service", {"service": svc})
+    out = []
+    for x in (data or []):
+        if not isinstance(x, dict):
+            continue
+        try:
+            ci = x.get("countryInfo") or {}
+            pi = x.get("priceInfo") or {}
+            si = x.get("stockInfo") or {}
+            cid = int(ci.get("id") or 0)
+            if cid <= 0:
+                continue
+            name = str(ci.get("name") or "").strip()
+            out.append({
+                "country_id": cid,
+                "name": name,
+                "name_chn": str(ci.get("nameChn") or name),
+                "iso": REG_ISO.get(name.lower(), ""),
+                "phone_code": str(ci.get("phoneCode") or ""),
+                "success": round(float((x.get("successInfo") or {}).get("successRate") or 0), 2),
+                "price_usd": float(pi.get("minSalePrice") or 0),
+                "price_max": float(pi.get("maxSalePrice") or 0),
+                "stock": int(si.get("count") or 0),
+                "available": bool(si.get("isAvailable")),
+            })
+        except Exception:
+            continue
+    out.sort(key=lambda r: (0 if r["success"] > 0 else 1, r["price_usd"]))
+    with _REG_CAT_LOCK:
+        _REG_CAT[svc] = (now, out)
+    try:
+        db.set_setting(cache_key, json.dumps({"ts": int(now), "list": out}, ensure_ascii=False))
+    except Exception:
+        pass
+    return out
+
+
+def regular_list(service: str = "go", only_success: bool = True) -> list:
+    out = []
+    for r in regular_catalog(service):
+        if only_success and (r["success"] <= 0 or not r["available"] or r["stock"] <= 0):
+            continue
+        out.append(r)
+    return out
+
+
+def regular_by_country(service: str, country_id: int):
+    try:
+        cid = int(country_id)
+    except Exception:
+        return None
+    for r in regular_catalog(service):
+        if r["country_id"] == cid:
+            return r
+    return None
+
+
+def regular_tiers(service: str, country_id: int) -> list:
+    """价格档位 [(单价USD, 累计库存)]，下单必须命中其中一档。"""
+    key = "%s:%d" % ((service or "go"), int(country_id))
+    now = time.time()
+    with _REG_TIER_LOCK:
+        hit = _REG_TIER.get(key)
+        if hit and now - hit[0] < 300:
+            return hit[1]
+    d = _nex_http("GET", "/api/getCountryByService",
+                  params={"serviceCode": (service or "go"), "countryId": int(country_id)}) or {}
+    rows = []
+    for k, v in (d.get("priceMap") or {}).items():
+        try:
+            rows.append((float(k), int(v)))
+        except Exception:
+            continue
+    rows.sort(key=lambda r: r[0])
+    with _REG_TIER_LOCK:
+        _REG_TIER[key] = (now, rows)
+    return rows
+
+
+def regular_buy(service: str = "go", country_id: int = 0, price: float = 0.0,
+                qty: int = 1) -> str:
+    """按国家买 1 个普通号码，返回纯数字号码（含国家码，无 +）。"""
+    svc = (service or "go").strip()[:8] or "go"
+    try:
+        cid = int(country_id)
+    except Exception:
+        cid = 0
+    if cid <= 0:
+        raise ProviderError("国家参数不正确")
+    tries = []
+    try:
+        if price and float(price) > 0:
+            tries.append(float(price))
+    except Exception:
+        pass
+    try:
+        for p, cnt in regular_tiers(svc, cid):
+            if cnt > 0 and all(abs(p - t) > 1e-9 for t in tries):
+                tries.append(p)
+            if len(tries) >= 4:
+                break
+    except ProviderBusy:
+        raise
+    except ProviderError:
+        pass
+    if not tries:
+        raise ProviderError("该国家暂时没有可用报价")
+    last = None
+    for p in tries[:3]:
+        try:
+            data = _nex_http("POST", "/api/order/purchase", json={
+                "serviceCode": svc, "countryId": cid,
+                "quantity": max(1, min(5, int(qty or 1))), "price": float(p)}) or {}
+        except ProviderBusy:
+            raise
+        except ProviderError as e:
+            last = e
+            continue          # 该价格档被抢空：换下一档重试
+        phones = [str(x).strip() for x in (data.get("phoneNumbers") or []) if str(x).strip()]
+        if phones:
+            return phones[0]
+        last = ProviderError("上游没有返回号码")
+    raise last or ProviderError("取号失败，请稍后重试")
+
+
+def regular_sms(phone: str, service: str = "go") -> dict:
+    """取普通号码最新一条短信：{'code': 验证码, 'text': 正文, 'at': 时间}。"""
+    num = re.sub(r"\D", "", phone or "")
+    if len(num) < 6:
+        raise ProviderError("号码格式不正确")
+    data = _nex_http("GET", "/api/sms/messages",
+                     params={"phoneNumber": num, "format": "json_latest"})
+    msg = data
+    if isinstance(msg, list):
+        msg = msg[-1] if msg else None
+    if not isinstance(msg, dict):
+        return {"code": "", "text": "", "at": ""}
+    return {"code": str(msg.get("code") or ""),
+            "text": str(msg.get("text") or ""),
+            "at": str(msg.get("smsTime") or "")}
+
+
 def finish(number: dict, success: bool) -> None:
     prov = number.get("provider") or "pool"
     try:
