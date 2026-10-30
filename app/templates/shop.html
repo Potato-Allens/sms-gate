@@ -8,7 +8,7 @@
 <meta name="description" content="按平台选购接码号码：显示成功率与实时价格，下单即发直链卡密，接收验证码即刻可用。">
 <link rel="stylesheet" href="/static/style.css?v=20261024i">
 <link rel="stylesheet" href="/static/landing.css?v=20261024i">
-<link rel="stylesheet" href="/static/shop.css?v=20261030a">
+<link rel="stylesheet" href="/static/shop.css?v=20261030b">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1220'/%3E%3Cpath d='M18 34l9 9 19-22' stroke='%2334e0b0' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body class="pub lp sh" data-page="shop" data-off="{{ '1' if shop_off else '0' }}">
@@ -71,6 +71,14 @@
     </div>
   </section>
 
+  <section class="sh-stock hidden" id="stockZone">
+    <div class="sh-stock-head">
+      <h2>现货专区 <span>卡密库存</span></h2>
+      <p>已回收的卡密链接现货，按下单先后自动发货；这一档售完再从上游平台补货。</p>
+    </div>
+    <div class="sh-stock-grid" id="stockGrid"></div>
+  </section>
+
   <div class="sh-stat">
     <span>共 <b id="statCount">0</b> 个平台在售</span>
     <span>·</span>
@@ -85,6 +93,6 @@
 </main>
 
 <div id="toast" class="toast"></div>
-<script src="/static/shop.js?v=20261030a"></script>
+<script src="/static/shop.js?v=20261030b"></script>
 </body>
 </html>

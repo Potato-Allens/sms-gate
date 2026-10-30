@@ -10,7 +10,7 @@
 价格单位统一为「分」(price_cents)；USD 单价只作为后台参考展示。
 """
 from __future__ import annotations
-import hashlib, re, secrets, threading, time
+import hashlib, re, secrets, sqlite3, threading, time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -31,11 +31,12 @@ REGION_COUNTRY = [
     ("马来", "my"), ("菲律宾", "ph"), ("越南", "vn"), ("泰国", "th"), ("日本", "jp"),
     ("韩国", "kr"), ("德国", "de"), ("法国", "fr"), ("巴西", "br"), ("俄罗斯", "ru"),
     ("印度", "in"), ("土耳其", "tr"), ("墨西哥", "mx"), ("西班牙", "es"), ("意大利", "it"),
+    ("中国", "cn"), ("国内", "cn"), ("大陆", "cn"),
 ]
 FLAGS = {"us": "🇺🇸", "gb": "🇬🇧", "hk": "🇭🇰", "ca": "🇨🇦", "id": "🇮🇩", "my": "🇲🇾",
          "ph": "🇵🇭", "vn": "🇻🇳", "th": "🇹🇭", "jp": "🇯🇵", "kr": "🇰🇷", "de": "🇩🇪",
          "fr": "🇫🇷", "br": "🇧🇷", "ru": "🇷🇺", "in": "🇮🇳", "tr": "🇹🇷", "mx": "🇲🇽",
-         "es": "🇪🇸", "it": "🇮🇹"}
+         "es": "🇪🇸", "it": "🇮🇹", "cn": "🇨🇳"}
 TYPE_NAMES = {1: "首次卡", 2: "重启卡", 3: "续费卡"}
 
 ICON_RULES = [
@@ -256,6 +257,107 @@ def api_products(request: Request, region: str = "", type: str = "", q: str = ""
               **catalog_meta())
 
 
+# ------------------------------------------------------------------ 现货库存（回收卡密）
+STOCK_CATES = {"us": "美国", "gb": "英国卡", "hk": "香港卡", "ca": "加拿大", "id": "印尼",
+               "cn": "中国"}
+
+
+def _cate_of(country: str, fallback: str = "") -> str:
+    return (fallback or "").strip() or STOCK_CATES.get((country or "").lower(), country or "通用")
+
+
+def _site() -> str:
+    return (db.get_setting("site_url", "") or "https://12456.cfd").rstrip("/")
+
+
+def stock_groups() -> list:
+    rows = db.q(
+        "SELECT cate_name, card_type, country, COUNT(*) AS n, MIN(price_cents) AS p "
+        "FROM shop_stock WHERE status='available' GROUP BY cate_name, card_type, country "
+        "ORDER BY n DESC, cate_name")
+    out = []
+    for r in rows:
+        n = int(r["n"] or 0)
+        if n <= 0:
+            continue
+        out.append({
+            "cate_name": r["cate_name"] or "通用", "card_type": r["card_type"] or "",
+            "country": r["country"] or "", "count": n,
+            "price_cents": int(r["p"] or 0), "price": money(r["p"]),
+            "flag": FLAGS.get((r["country"] or "").lower(), "🌐"),
+        })
+    return out
+
+
+@router.get("/shop/api/stock")
+def api_stock(request: Request):
+    if db.get_setting("shop_stock_on", "1") != "1":
+        return ok(groups=[])
+    return ok(groups=stock_groups())
+
+
+@router.post("/shop/api/stock/buy")
+async def api_stock_buy(request: Request):
+    if db.get_setting("shop_stock_on", "1") != "1":
+        return err("现货专区未开放", 403)
+    u = require_user(request)
+    body = await _body(request)
+    _csrf(request, u, body)
+    cate = str(body.get("cate_name") or "").strip()[:40]
+    ctype = str(body.get("card_type") or "").strip()[:16]
+    idem = str(body.get("idem") or "").strip()[:64]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", idem or ""):
+        idem = secrets.token_hex(12)
+    allowed, retry = security.hit_shared("shopbuy:%s" % u["user_id"], 60, 3600)
+    if not allowed:
+        return err("下单过于频繁，请 %d 分钟后重试" % max(1, retry // 60), 429)
+    now = int(time.time())
+    try:
+        with db.tx() as c:
+            ex = c.execute("SELECT * FROM shop_orders WHERE user_id=? AND idem=?",
+                           (u["user_id"], idem)).fetchone()
+            if ex:
+                return ok(order=order_public(dict(ex)), replay=True,
+                          balance=money(u["balance_cents"]))
+            row = c.execute(
+                "SELECT * FROM shop_stock WHERE status='available' AND cate_name=? "
+                "AND card_type=? ORDER BY price_cents, id LIMIT 1", (cate, ctype)).fetchone()
+            if not row:
+                raise ShopError("该现货已售完，请从商城选购", 409)
+            price = int(row["price_cents"] or 0)
+            if price <= 0:
+                raise ShopError("该现货未定价，请联系客服", 409)
+            uu = c.execute("SELECT * FROM shop_users WHERE id=?", (u["user_id"],)).fetchone()
+            if int(uu["balance_cents"]) < price:
+                raise ShopError("余额不足，请先充值", 402)
+            cur = c.execute("UPDATE shop_stock SET status='sold', order_id=?, sold_at=? "
+                            "WHERE id=? AND status='available'", (0, now, row["id"]))
+            if cur.rowcount != 1:
+                raise ShopError("手慢了，刚被抢走，请重新下单", 409)
+            bal = int(uu["balance_cents"]) - price
+            c.execute("UPDATE shop_users SET balance_cents=? WHERE id=?", (bal, u["user_id"]))
+            label = "现货 · %s%s" % (row["cate_name"] or "通用",
+                                     (" · " + row["card_type"]) if row["card_type"] else "")
+            cur2 = c.execute(
+                "INSERT INTO shop_orders(user_id,product_id,app_id,app_name,country,card_type,"
+                "price_cents,status,relay_card_id,relay_token,phone,link,idem,ip,created_at,done_at) "
+                "VALUES(?,0,0,?,?,?,?,'done',?,?,?,?,?,?,?,?)",
+                (u["user_id"], label, row["country"], row["card_type"], price,
+                 int(row["ref_id"] or 0) if row["kind"] == "relay" else 0,
+                 "", row["phone"] or "", row["link"] or "", idem, _ip(request), now, now))
+            oid = cur2.lastrowid
+            c.execute("UPDATE shop_stock SET order_id=? WHERE id=?", (oid, row["id"]))
+            c.execute("INSERT INTO shop_ledger(user_id,delta_cents,balance_after,kind,ref,note,"
+                      "created_at) VALUES(?,?,?,?,?,?,?)",
+                      (u["user_id"], -price, bal, "buy_stock", str(oid), label, now))
+            order = c.execute("SELECT * FROM shop_orders WHERE id=?", (oid,)).fetchone()
+    except ShopError as e:
+        return err(str(e), e.code)
+    security.audit("shop_stock_order", "info", ip=_ip(request), actor="u%d" % u["user_id"],
+                   detail={"order": oid, "cate": cate, "type": ctype, "price": price})
+    return ok(order=order_public(dict(order)), balance=money(bal), balance_cents=bal)
+
+
 @router.post("/shop/api/register")
 async def api_register(request: Request):
     if db.get_setting("shop_register_on", "1") != "1":
@@ -273,22 +375,48 @@ async def api_register(request: Request):
         return err("密码至少 8 位")
     if password.isdigit():
         return err("密码不能是纯数字")
+    need_code = db.get_setting("shop_register_need_code", "1") == "1"
+    code = re.sub(r"[^A-Z0-9]", "", str(body.get("code") or "").upper())
+    if need_code and len(code) < 12:
+        return err("请先填写购买到的充值码，注册后自动充进余额")
     now = int(time.time())
+    amount = 0
     try:
         with db.tx() as c:
             if c.execute("SELECT 1 FROM shop_users WHERE username=?", (username,)).fetchone():
                 raise ShopError("该账号已被注册")
+            if need_code:
+                h = hashlib.sha256(("shoprc:" + code).encode()).hexdigest()
+                row = c.execute("SELECT * FROM shop_rcodes WHERE code_hash=?", (h,)).fetchone()
+                if not row:
+                    raise ShopError("充值码不存在，请核对后重试")
+                if row["status"] != "active":
+                    raise ShopError("该充值码已被使用")
+                if row["expires_at"] and int(row["expires_at"]) < now:
+                    raise ShopError("该充值码已过期")
+                cur = c.execute("UPDATE shop_rcodes SET status='used', used_at=? "
+                                "WHERE id=? AND status='active'", (now, row["id"]))
+                if cur.rowcount != 1:
+                    raise ShopError("该充值码已被使用")
+                amount = int(row["amount_cents"])
             cur = c.execute(
-                "INSERT INTO shop_users(username,pass_hash,created_at,last_login_at,last_ip) "
-                "VALUES(?,?,?,?,?)",
-                (username, security.hash_password(password), now, now, ip))
+                "INSERT INTO shop_users(username,pass_hash,balance_cents,created_at,last_login_at,last_ip) "
+                "VALUES(?,?,?,?,?,?)",
+                (username, security.hash_password(password), amount, now, now, ip))
             uid = cur.lastrowid
+            if need_code:
+                c.execute("UPDATE shop_rcodes SET used_by=? WHERE id=?", (uid, row["id"]))
+                c.execute("INSERT INTO shop_ledger(user_id,delta_cents,balance_after,kind,ref,note,"
+                          "created_at) VALUES(?,?,?,?,?,?,?)",
+                          (uid, amount, amount, "recharge", str(row["id"]),
+                           "注册充值码 " + (row["code_prefix"] or ""), now))
     except ShopError as e:
         return err(str(e))
     sid, csrf = create_session(uid, ip, _ua(request))
-    security.audit("shop_register", "info", ip=ip, actor=username, detail={"uid": uid})
-    resp = ok(user={"id": uid, "username": username, "balance_cents": 0, "balance": "0.00"},
-              csrf=csrf)
+    security.audit("shop_register", "info", ip=ip, actor=username,
+                   detail={"uid": uid, "rcode_amount": amount})
+    resp = ok(user={"id": uid, "username": username, "balance_cents": amount,
+                    "balance": money(amount)}, csrf=csrf, amount=money(amount))
     _cookie(resp, request, sid)
     return resp
 
@@ -1064,6 +1192,242 @@ async def adm_rcodes_disable(request: Request):
     security.audit("shop_rcode_disable", "warn", ip=_ip(request), actor=s["username"],
                    detail={"id": rid})
     return ok()
+
+
+# ---------------------------------------------------------------- 后台：卡密库存
+def _norm_card_key(raw: str) -> str:
+    s = (raw or "").strip().upper().replace(" ", "")
+    if "/C/" in s:
+        s = s.split("/C/", 1)[1]
+    s = s.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    return s
+
+
+def _card_key_hash(key: str) -> str:
+    return hashlib.sha256(("sg:" + key).encode()).hexdigest()
+
+
+def _stock_insert(c, kind, ref_id, link, phone, country, cate, ctype, price, batch, note="") -> bool:
+    try:
+        c.execute(
+            "INSERT INTO shop_stock(kind,ref_id,link,phone,country,cate_name,card_type,price_cents,"
+            "status,batch,note,created_at) VALUES(?,?,?,?,?,?,?,?,'available',?,?,?)",
+            (kind, int(ref_id), link, phone or "", country or "", cate or "", ctype or "",
+             int(price), batch, note[:120], int(time.time())))
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+@admin_router.get("/api/shop/stock/preview")
+def adm_stock_preview(request: Request, cate_name: str = "", card_type: str = "", days: int = 0):
+    """回收前预览：按运营商 / 卡类型 / 创建时间统计仍可回收的直链卡。"""
+    _admin(request)
+    now = int(time.time())
+    where = ("status='active' AND (expires_at=0 OR expires_at>?) AND reads=0 "
+             "AND created_by NOT LIKE 'shop:%' "
+             "AND id NOT IN (SELECT ref_id FROM shop_stock WHERE kind='relay')")
+    args = [now]
+    country = country_of(cate_name)
+    if country:
+        where += " AND country=?"
+        args.append(country)
+    if card_type:
+        where += " AND card_type=?"
+        args.append(card_type)
+    days = max(0, min(3650, int(days or 0)))
+    if days:
+        where += " AND created_at<=?"
+        args.append(now - days * 86400)
+    rows = db.q("SELECT country, card_type, COUNT(*) AS n FROM relay_cards WHERE " + where +
+                " GROUP BY country, card_type ORDER BY n DESC", tuple(args))
+    groups = [{"country": r["country"] or "", "card_type": r["card_type"] or "",
+               "count": int(r["n"] or 0)} for r in rows]
+    total = sum(g["count"] for g in groups)
+    return ok(total=total, groups=groups, country=country, days=days)
+
+
+@admin_router.post("/api/shop/stock/recover")
+async def adm_stock_recover(request: Request):
+    s = _admin(request)
+    body = await _body(request)
+    _ac(request, s, body)
+    mode = str(body.get("mode") or "links")
+    cate = str(body.get("cate_name") or "").strip()[:40]
+    ctype = str(body.get("card_type") or "").strip()[:16]
+    country = country_of(cate)
+    cate = cate or _cate_of(country)
+    if mode == "relay" and not country:
+        return err("请先填写运营商（例如 中国 / 美国 / 香港卡），避免不同国家的卡混进同一库存")
+    try:
+        price = yuan_to_cents(body.get("price_yuan") or 0)
+    except ShopError as e:
+        return err(str(e))
+    if price < 10:
+        return err("请填写现货售价（至少 0.1 元），否则买家无法下单")
+    try:
+        limit = max(1, min(500, int(body.get("limit") or 50)))
+    except Exception:
+        limit = 50
+    try:
+        days = max(0, min(3650, int(body.get("days") or 0)))
+    except Exception:
+        days = 0
+    note = str(body.get("note") or "")[:120]
+    batch = "S" + time.strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(2).upper()
+    now = int(time.time())
+    added = dup = 0
+    bad = []
+    # 同分组统一售价，避免同货不同价
+    try:
+        db.conn().execute("UPDATE shop_stock SET price_cents=? WHERE status='available' "
+                          "AND cate_name=? AND card_type=?", (price, cate, ctype))
+    except Exception:
+        pass
+
+    if mode == "relay":
+        sql = ("SELECT * FROM relay_cards WHERE status='active' AND (expires_at=0 OR expires_at>?) "
+               "AND reads=0 AND created_by NOT LIKE 'shop:%' "
+               "AND id NOT IN (SELECT ref_id FROM shop_stock WHERE kind='relay')")
+        args = [now]
+        if country:
+            sql += " AND country=?"
+            args.append(country)
+        if ctype:
+            sql += " AND card_type=?"
+            args.append(ctype)
+        if days:
+            sql += " AND created_at<=?"
+            args.append(now - days * 86400)
+        sql += " ORDER BY id LIMIT ?"
+        args.append(limit)
+        rows = db.q(sql, tuple(args))
+        with db.tx() as c:
+            for r in rows:
+                line = relay_api._line(r["phone"], r["token"])
+                if _stock_insert(c, "relay", r["id"], line, r["phone"], r["country"] or country,
+                                 cate, ctype or (r["card_type"] or ""), price, batch, note):
+                    added += 1
+                else:
+                    dup += 1
+    else:
+        text = str(body.get("text") or "")
+        lines = [x.strip() for x in text.splitlines() if x.strip()][:600]
+        if not lines:
+            return err("请粘贴卡密链接（每行一条），或改用「自动回收直链卡」")
+        with db.tx() as c:
+            for raw in lines:
+                item = raw.strip().strip("<>\"'")
+                if "/c/" in item.lower():
+                    key = _norm_card_key(item)
+                    if len(key) < 8:
+                        bad.append(item[:60])
+                        continue
+                    card = c.execute("SELECT * FROM cards WHERE key_hash=?",
+                                     (_card_key_hash(key),)).fetchone()
+                    if not card:
+                        bad.append(item[:60])
+                        continue
+                    if card["status"] != "active":
+                        bad.append("已停用:" + item[:50])
+                        continue
+                    if int(card["used_codes"] or 0) >= int(card["max_codes"] or 1):
+                        bad.append("已使用:" + item[:50])
+                        continue
+                    link = _site() + "/c/" + key
+                    ctype2 = ctype or (card["card_type"] if "card_type" in card.keys() else "") or ""
+                    if _stock_insert(c, "card", card["id"], link, "", country, cate, ctype2,
+                                     price, batch, note):
+                        added += 1
+                    else:
+                        dup += 1
+                elif "----" in item:
+                    m = re.search(r"token=([0-9a-fA-F]{16,64})", item)
+                    if not m:
+                        bad.append(item[:60])
+                        continue
+                    rc = c.execute("SELECT * FROM relay_cards WHERE token=?",
+                                   (m.group(1),)).fetchone()
+                    if not rc:
+                        bad.append("找不到直链:" + item[:50])
+                        continue
+                    line = relay_api._line(rc["phone"], rc["token"])
+                    if _stock_insert(c, "relay", rc["id"], line, rc["phone"],
+                                     rc["country"] or country, cate,
+                                     ctype or (rc["card_type"] or ""), price, batch, note):
+                        added += 1
+                    else:
+                        dup += 1
+                else:
+                    bad.append(item[:60])
+    if not added and not dup:
+        return err("没有可回收的卡密：请检查链接是否属于本站、是否已被使用", 400, bad=bad[:20])
+    security.audit("shop_stock_recover", "alert", ip=_ip(request), actor=s["username"],
+                   detail={"mode": mode, "added": added, "dup": dup, "batch": batch,
+                           "cate": cate, "type": ctype, "price": price})
+    return ok(added=added, dup=dup, bad=bad[:20], batch=batch, cate=cate, card_type=ctype,
+              price=money(price), available=sum(g["count"] for g in stock_groups()))
+
+
+@admin_router.get("/api/shop/stock")
+def adm_stock(request: Request, status: str = "available", cate: str = "", page: int = 1,
+              size: int = 50):
+    _admin(request)
+    where, args = "1=1", []
+    if status:
+        where += " AND status=?"
+        args.append(status)
+    if cate:
+        where += " AND (cate_name=? OR country=?)"
+        args += [cate, cate]
+    total = db.q1("SELECT COUNT(*) AS n FROM shop_stock WHERE " + where, tuple(args))["n"]
+    page = max(1, int(page or 1))
+    size = max(10, min(200, int(size or 50)))
+    rows = db.q("SELECT * FROM shop_stock WHERE " + where +
+                " ORDER BY id DESC LIMIT ? OFFSET ?", tuple(args) + (size, (page - 1) * size))
+    out = [{"id": r["id"], "kind": r["kind"], "link": r["link"], "phone": r["phone"] or "",
+            "country": r["country"] or "", "cate_name": r["cate_name"] or "",
+            "card_type": r["card_type"] or "", "price": money(r["price_cents"]),
+            "status": r["status"], "batch": r["batch"] or "", "order_id": r["order_id"],
+            "created_at": r["created_at"], "sold_at": r["sold_at"]} for r in rows]
+    return ok(stock=out, total=int(total), page=page, size=size,
+              groups=stock_groups())
+
+
+@admin_router.post("/api/shop/stock/remove")
+async def adm_stock_remove(request: Request):
+    s = _admin(request)
+    body = await _body(request)
+    _ac(request, s, body)
+    try:
+        sid = int(body.get("id") or 0)
+    except Exception:
+        return err("参数错误")
+    db.conn().execute("UPDATE shop_stock SET status='removed' WHERE id=? AND status='available'",
+                      (sid,))
+    security.audit("shop_stock_remove", "warn", ip=_ip(request), actor=s["username"],
+                   detail={"id": sid})
+    return ok()
+
+
+@admin_router.post("/api/shop/stock/price")
+async def adm_stock_price(request: Request):
+    s = _admin(request)
+    body = await _body(request)
+    _ac(request, s, body)
+    cate = str(body.get("cate_name") or "").strip()[:40]
+    ctype = str(body.get("card_type") or "").strip()[:16]
+    try:
+        price = yuan_to_cents(body.get("price_yuan") or 0)
+    except ShopError as e:
+        return err(str(e))
+    if price < 10:
+        return err("售价至少 0.1 元")
+    db.conn().execute("UPDATE shop_stock SET price_cents=? WHERE status='available' "
+                      "AND cate_name=? AND card_type=?", (price, cate, ctype))
+    security.audit("shop_stock_price", "alert", ip=_ip(request), actor=s["username"],
+                   detail={"cate": cate, "type": ctype, "price": price})
+    return ok(price=money(price))
 
 
 @admin_router.get("/api/shop/users")

@@ -308,6 +308,25 @@ CREATE TABLE IF NOT EXISTS shop_ledger(
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_shop_ledger_user ON shop_ledger(user_id, id DESC);
+CREATE TABLE IF NOT EXISTS shop_stock(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL DEFAULT 'card',
+  ref_id INTEGER NOT NULL DEFAULT 0,
+  link TEXT NOT NULL DEFAULT '',
+  phone TEXT DEFAULT '',
+  country TEXT DEFAULT '',
+  cate_name TEXT DEFAULT '',
+  card_type TEXT DEFAULT '',
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'available',
+  batch TEXT DEFAULT '',
+  order_id INTEGER DEFAULT 0,
+  note TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  sold_at INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_shop_stock_pick ON shop_stock(status, cate_name, card_type, price_cents, id);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_shop_stock_uniq ON shop_stock(kind, ref_id);
 """
 
 DEFAULTS = {
@@ -370,6 +389,8 @@ DEFAULTS = {
     "shop_sync_cates": "",
     "shop_sync_pages": "1",
     "shop_max_orders_per_user": "3",
+    "shop_stock_on": "1",
+    "shop_register_need_code": "1",
 }
 
 

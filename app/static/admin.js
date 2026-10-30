@@ -116,6 +116,7 @@
     shoporders: ["商城订单", "直链卡发货与退款"],
     rcodes: ["充值码", "批量生成与核销情况"],
     shopusers: ["商城用户", "余额、状态与消费"],
+    stock: ["卡密库存", "回收卡密链接 · 现货优先发货"],
   };
 
   function route() {
@@ -127,7 +128,8 @@
     $("pageSub").textContent = TITLES[r][1];
     ({ dashboard: pageDashboard, cards: pageCards, relay: pageRelay, numbers: pageNumbers, redemptions: pageRedemptions,
        codes: pageCodes, usage: pageUsage, audit: pageAudit, ips: pageIps, settings: pageSettings,
-       shop: pageShop, shoporders: pageShopOrders, rcodes: pageRcodes, shopusers: pageShopUsers })[r]();
+       shop: pageShop, shoporders: pageShopOrders, rcodes: pageRcodes, shopusers: pageShopUsers,
+       stock: pageStock })[r]();
   }
 
   function closeModal() {
@@ -147,7 +149,7 @@
     if (!el) return;
     const act = el.dataset.act;
     if (act === "copy") { copy(el.dataset.text || ""); return; }
-    if (/^(shop-|ord-|rc-|u-)/.test(act) || act === "copy-all-codes" || act === "dl-codes") {
+    if (/^(shop-|ord-|rc-|u-|stock-)/.test(act) || act === "copy-all-codes" || act === "dl-codes") {
       shopAction(act, el); return;
     }
     if (act === "page") { goPage(el.dataset.page); return; }
@@ -180,6 +182,7 @@
     else if (e.target.id === "importForm") { e.preventDefault(); importNumbers(); }
     else if (e.target.id === "settingsForm") { e.preventDefault(); saveSettings(); }
     else if (e.target.id === "blockForm") { e.preventDefault(); blockIpSubmit(); }
+    else if (e.target.id === "stockForm") { e.preventDefault(); stockRecover(e.target); }
   }
 
   const KIND = {
@@ -196,6 +199,8 @@
     relay_create: "生成直链卡", relay_from_pool: "号池转直链", relay_reset: "重置直链",
     relay_disable: "禁用直链", relay_enable: "启用直链", relay_delete: "删除直链",
     relay_error: "直链取码异常",
+    shop_stock_recover: "回收卡密", shop_stock_order: "现货下单",
+    shop_stock_remove: "移除库存", shop_stock_price: "库存改价",
   };
   async function pageDashboard() {
     content.innerHTML = '<div class="loading">加载中…</div>';
@@ -1308,8 +1313,154 @@
       pager(d.total, d.page, d.size);
   }
 
+  async function pageStock() {
+    const st = S.pageState.stock = S.pageState.stock || { status: "available", cate: "", page: 1 };
+    content.innerHTML = '<div class="loading">加载中…</div>';
+    const q = new URLSearchParams({ status: st.status || "", cate: st.cate || "",
+      page: String(st.page || 1), size: "50" });
+    const d = await api("/admin/api/shop/stock?" + q.toString());
+    if (!d.ok) { content.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+    const groups = d.groups || [];
+    const available = groups.reduce((a, g) => a + Number(g.count || 0), 0);
+    const gRows = groups.map((g) =>
+      "<tr><td>" + esc(g.flag || "🌐") + " <b>" + esc(g.cate_name) + "</b></td><td>" +
+      esc(g.card_type || "不限") + "</td><td class='mono'>" + g.count + "</td><td class='mono'>¥" +
+      esc(g.price) + "</td><td><input class='stock-price' data-cate='" + esc(g.cate_name) +
+      "' data-ctype='" + esc(g.card_type || "") + "' value='" + esc(g.price) +
+      "' style='width:86px'></td><td><button class='btn mini' data-act='stock-price' data-cate='" +
+      esc(g.cate_name) + "' data-ctype='" + esc(g.card_type || "") + "'>保存售价</button></td></tr>").join("");
+    const rows = (d.stock || []).map((s) =>
+      "<tr><td class='mono'>" + s.id + "</td><td>" + badge(s.kind === "relay" ? "直链" : "卡密", "info") +
+      "</td><td class='mono small' style='max-width:340px;word-break:break-all'>" + esc(s.link) +
+      "</td><td>" + esc(s.cate_name || "—") + "</td><td>" + esc(s.card_type || "—") +
+      "</td><td class='mono'>¥" + esc(s.price) + "</td><td>" + stockBadge(s.status) +
+      "</td><td class='mono small'>" + esc(s.batch || "—") + "</td><td class='mono small'>" +
+      fmt(s.created_at) + "</td><td>" + (s.status === "available"
+        ? '<button class="btn mini danger" data-act="stock-remove" data-id="' + s.id + '">移除</button>'
+        : "—") + "</td></tr>").join("");
+    content.innerHTML =
+      '<div class="stats">' +
+      stat("在库现货", available, "可立即发货", available ? "g" : "w") +
+      stat("库存分组", groups.length, "运营商 + 卡类型", "b") +
+      stat("当前筛选", (d.stock || []).length + " / " + d.total, "本页 / 全部", "b") +
+      "</div>" +
+
+      '<div class="card mt18"><div class="card-title"><h3>回收卡密链接</h3>' +
+      '<span class="hint">已售出的卡密继续有效；回收只针对未售出的卡，入库后优先于上游进货发货</span></div>' +
+      '<form id="stockForm" class="form-grid">' +
+      '<label class="fld">回收方式<select name="mode">' +
+      '<option value="relay">自动回收：未读直链卡</option>' +
+      '<option value="links">粘贴卡密链接</option></select></label>' +
+      '<label class="fld">运营商 / 分类<input name="cate_name" placeholder="美国(实卡) / 英国卡 / 香港卡"></label>' +
+      '<label class="fld">卡类型<select name="card_type"><option value="">不限 / 按原卡</option>' +
+      '<option value="首次卡">首次卡</option><option value="重启卡">重启卡</option>' +
+      '<option value="续费卡">续费卡</option></select></label>' +
+      '<label class="fld">现货售价（元）<input name="price_yuan" placeholder="5.00"></label>' +
+      '<label class="fld">本次最多回收<input name="limit" value="50"></label>' +
+      '<label class="fld">只回收 N 天前创建（0=不限）<input name="days" value="0"></label>' +
+      '<label class="fld">备注<input name="note" placeholder="可选，例如 10 月回收批次"></label>' +
+      '<label class="fld full">粘贴卡密链接（每行一条，仅「粘贴」模式需要）' +
+      '<textarea name="text" rows="5" placeholder="https://12456.cfd/c/XXXX&#10;卡号:+17798001455----https://api.12456.cfd/smsrecord?token=..."></textarea></label>' +
+      '<div class="fld full"><button class="btn primary" type="submit">开始回收</button>' +
+      '<button class="btn ghost" type="button" data-act="stock-preview" style="margin-left:8px">预览可回收数量</button>' +
+      '<div class="help" id="stockHint">同一「运营商 + 卡类型」统一售价；卡密链接必须粘贴上传（库里只存哈希，明文无法还原）。</div></div>' +
+      "</form></div>" +
+
+      '<div class="card mt18"><div class="card-title"><h3>库存分组</h3>' +
+      '<span class="hint">现货专区按分组展示，售完自动隐藏</span></div>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>运营商</th><th>卡类型</th><th>数量</th>' +
+      "<th>售价 ¥</th><th>改价</th><th></th></tr></thead><tbody>" +
+      (gRows || "<tr><td colspan=6 class='empty'>还没有回收的现货，先用上方表单回收一批</td></tr>") +
+      "</tbody></table></div></div>" +
+
+      '<div class="card mt18"><div class="card-title"><h3>库存明细</h3>' +
+      '<span class="hint">链接即发货内容，移除后不会再发给买家</span></div>' +
+      '<div class="row gap10 wrap">' +
+      '<input id="stockCate" placeholder="筛选运营商 / 分类" value="' + esc(st.cate || "") + '" style="max-width:240px">' +
+      '<select id="stockStatus">' + opt("available", "在库", st.status) + opt("sold", "已售", st.status) +
+      opt("removed", "已移除", st.status) + opt("", "全部", st.status) + "</select>" +
+      '<button class="btn mini" type="button" data-act="stock-search">查询</button>' +
+      '<span class="help">共 ' + d.total + " 条</span></div>" +
+      '<div class="mt12"><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>类型</th><th>卡密链接</th>' +
+      "<th>运营商</th><th>卡类型</th><th>售价 ¥</th><th>状态</th><th>批次</th><th>入库时间</th><th>操作</th>" +
+      "</tr></thead><tbody>" +
+      (rows || "<tr><td colspan=10 class='empty'>暂无库存记录</td></tr>") + "</tbody></table></div>" +
+      pager(d.total, d.page, d.size) + "</div></div>";
+  }
+
+  function stockBadge(s) {
+    return s === "available" ? badge("在库", "g") : s === "sold" ? badge("已售", "info")
+      : s === "removed" ? badge("已移除", "") : badge(s || "—", "");
+  }
+
+  async function stockRecover(form) {
+    const fd = new FormData(form);
+    const body = {};
+    fd.forEach((v, k) => { body[k] = v; });
+    const hint = $("stockHint");
+    if ((body.mode || "links") === "relay") {
+      const pv = await api("/admin/api/shop/stock/preview?" + new URLSearchParams({
+        cate_name: body.cate_name || "", card_type: body.card_type || "",
+        days: body.days || "0" }).toString());
+      if (!pv.ok) { toast(pv.error || "预览失败", "bad"); return; }
+      if (!pv.total) {
+        toast("没有符合条件的未读直链卡", "bad");
+        if (hint) hint.textContent = "没有符合条件的未读直链卡（或都已被读取过）";
+        return;
+      }
+      if (!confirm("将回收 " + pv.total + " 张直链卡进库存（运营商 " + (body.cate_name || "—") +
+                   "），回收后库存优先发货，确定？")) return;
+    }
+    if (hint) hint.textContent = "正在回收…";
+    const d = await api("/admin/api/shop/stock/recover", { method: "POST", body });
+    if (!d.ok) {
+      toast(d.error || "回收失败", "bad");
+      if (hint) hint.textContent = (d.bad && d.bad.length)
+        ? "跳过：" + d.bad.join(" / ") : (d.error || "回收失败");
+      return;
+    }
+    toast("已回收 " + d.added + " 个" + (d.dup ? "（重复 " + d.dup + "）" : "") +
+      "，在库 " + d.available, "good");
+    pageStock();
+  }
+
   async function shopAction(act, el) {
     const id = el.dataset.id;
+    if (act === "stock-preview") {
+      const f = $("stockForm");
+      const get = (n) => (f && f.elements[n] ? f.elements[n].value : "");
+      const d = await api("/admin/api/shop/stock/preview?" + new URLSearchParams({
+        cate_name: get("cate_name"), card_type: get("card_type"),
+        days: get("days") || "0" }).toString());
+      const hint = $("stockHint");
+      if (!d.ok) { toast(d.error || "预览失败", "bad"); return; }
+      const detail = (d.groups || []).map((g) => (g.country || "?") + "/" +
+        (g.card_type || "不限") + " " + g.count).join("，");
+      toast("可回收 " + d.total + " 张", d.total ? "good" : "bad");
+      if (hint) hint.textContent = d.total
+        ? ("可回收 " + d.total + " 张：" + detail) : "没有符合条件的未读直链卡";
+      return;
+    }
+    if (act === "stock-search") {
+      const st = S.pageState.stock;
+      st.cate = $("stockCate").value.trim(); st.status = $("stockStatus").value; st.page = 1;
+      return pageStock();
+    }
+    if (act === "stock-price") {
+      const tr = el.closest("tr");
+      const inp = tr ? tr.querySelector("input") : null;
+      const d = await api("/admin/api/shop/stock/price", { method: "POST", body: {
+        cate_name: el.dataset.cate || "", card_type: el.dataset.ctype || "",
+        price_yuan: inp ? inp.value : "" } });
+      toast(d.ok ? ("售价已改为 ¥" + d.price) : (d.error || "改价失败"), d.ok ? "good" : "bad");
+      return d.ok && pageStock();
+    }
+    if (act === "stock-remove") {
+      if (!confirm("移除后这条卡密不再发给买家（已售出的不受影响），确定？")) return;
+      const d = await api("/admin/api/shop/stock/remove", { method: "POST", body: { id } });
+      toast(d.ok ? "已移除" : (d.error || "操作失败"), d.ok ? "good" : "bad");
+      return d.ok && pageStock();
+    }
     if (act === "shop-save") {
       const inp = document.querySelector(".shop-price[data-id='" + id + "']");
       const d = await api("/admin/api/shop/product", { method: "POST",

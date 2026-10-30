@@ -169,6 +169,7 @@
       renderChips();
       renderProducts(d.products || []);
       setNavUser(d.user || null);
+      loadStock();
     });
   }
 
@@ -206,6 +207,65 @@
           toast("订单已提交", "good");
         }
         loadShop();
+      });
+  }
+
+  /* ------------------------------------------------------------ 现货专区 */
+  function stockCardHtml(g) {
+    return '<article class="sh-stock-card">' +
+      '<div class="sh-stock-flag">' + esc(g.flag || "\u{1F310}") + "</div>" +
+      '<div class="sh-stock-main"><b>' + esc(g.cate_name) +
+      (g.card_type ? "<span>" + esc(g.card_type) + "</span>" : "") + "</b>" +
+      "<small>剩余 <b>" + esc(g.count) + "</b> 个 · 售完自动从平台补货</small></div>" +
+      '<div class="sh-stock-buy"><div class="sh-price">¥<b>' + esc(g.price) + "</b></div>" +
+      '<button class="btn primary sm" type="button" data-stock="1" data-cate="' + esc(g.cate_name) +
+      '" data-ctype="' + esc(g.card_type || "") + '">现货直发</button></div></article>';
+  }
+
+  function renderStock(groups) {
+    var zone = $("stockZone"), grid = $("stockGrid");
+    if (!zone || !grid) return;
+    var list = groups || [];
+    if (!list.length) { zone.classList.add("hidden"); grid.innerHTML = ""; return; }
+    zone.classList.remove("hidden");
+    grid.innerHTML = list.map(stockCardHtml).join("");
+  }
+
+  function loadStock() {
+    api("/shop/api/stock").then(function (d) {
+      if (d && d.ok) renderStock(d.groups || []);
+    });
+  }
+
+  function buyStock(btn) {
+    if (!STATE.user) {
+      toast("请先登录再购买", "bad");
+      setTimeout(function () { location.href = "/shop/login?next=/shop"; }, 700);
+      return;
+    }
+    if (STATE.busy) return;
+    STATE.busy = true;
+    var old = btn.textContent;
+    btn.disabled = true; btn.textContent = "发货中…";
+    api("/shop/api/stock/buy", { method: "POST", body: {
+      cate_name: btn.dataset.cate, card_type: btn.dataset.ctype || "", idem: randomIdem() } })
+      .then(function (d) {
+        STATE.busy = false; btn.disabled = false; btn.textContent = old;
+        if (!d.ok) {
+          if (d._status === 401) { location.href = "/shop/login"; return; }
+          toast(d.error || "下单失败", "bad");
+          if (d._status === 402) { setTimeout(function () { location.href = "/shop/me"; }, 900); }
+          if (d._status === 409) loadStock();
+          return;
+        }
+        if (d.balance !== undefined && STATE.user) {
+          STATE.user.balance = d.balance;
+          setNavUser(STATE.user);
+        }
+        var o = d.order || {};
+        if (o.link) { copy(o.link, "已复制卡密，可直接发给客户"); showLink(o); }
+        else { toast("订单已提交", "good"); }
+        loadStock();
       });
   }
 
@@ -266,7 +326,8 @@
       var btn = $("rgBtn");
       btn.disabled = true;
       api("/shop/api/register", { method: "POST", body: {
-        username: $("rgUser").value.trim(), password: $("rgPass").value } }).then(function (d) {
+        username: $("rgUser").value.trim(), password: $("rgPass").value,
+        code: ($("rgCode").value || "").trim() } }).then(function (d) {
         btn.disabled = false;
         if (!d.ok) { err.textContent = d.error || "注册失败"; err.classList.add("show"); return; }
         STATE.csrf = d.csrf || "";
@@ -382,6 +443,8 @@
       paintProducts();
       return;
     }
+    var sb = e.target.closest("[data-stock]");
+    if (sb && !sb.disabled) { buyStock(sb); return; }
     var b = e.target.closest("[data-buy]");
     if (b && !b.disabled) { buy(b.dataset.buy, b); }
   });
@@ -393,7 +456,7 @@
     timer = setTimeout(function () { STATE.q = e.target.value.trim(); loadShop(); }, 280);
   });
 
-  if (page === "shop") loadShop();
+  if (page === "shop") { loadShop(); loadStock(); }
   else if (page === "login") bindLogin();
   else if (page === "me") { bindMe(); loadMe(); }
 })();
