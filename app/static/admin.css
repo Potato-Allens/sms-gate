@@ -190,3 +190,4 @@ select[multiple] option:checked{background:#17453b;color:#9cf5db}
 
 .row select{min-width:132px}
 .row input[type=number]{min-width:96px}
+.prov-cn{color:#8fb6ff!important}

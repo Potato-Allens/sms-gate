@@ -127,11 +127,16 @@
       '<div class="sh-tags">' +
       '<span class="sh-tag">' + esc(p.flag) + " " + esc(p.cate_name || "全球") + "</span>" +
       (oos ? '<span class="sh-tag warn">缺货</span>'
-           : '<span class="sh-tag idle">库存 ' + esc(p.stock) + "</span>") +
+           : (Number(p.stock) >= 9999
+              ? '<span class="sh-tag idle">现货充足</span>'
+              : '<span class="sh-tag idle">库存 ' + esc(p.stock) + "</span>")) +
       "</div>" +
-      '<div class="sh-meter"><span>成功率 ' + esc(p.success) + "%</span>" +
-      '<span class="sh-bar"><i class="' + rateClass(p.success) + '" style="width:' +
-      rate + '%"></i></span></div></div>' +
+      (Number(p.success) > 0
+        ? '<div class="sh-meter"><span>成功率 ' + esc(p.success) + "%</span>" +
+          '<span class="sh-bar"><i class="' + rateClass(p.success) + '" style="width:' +
+          rate + '%"></i></span></div>'
+        : '<div class="sh-meter"><span class="sh-direct">国内直连通道 · 实卡/虚卡自动匹配</span></div>') +
+      "</div>" +
       '<div class="sh-buy"><div class="sh-price">¥<b>' + esc(p.price) + "</b></div>" +
       '<button class="btn primary" data-buy="' + p.id + '"' + (oos ? " disabled" : "") + ">" +
       (oos ? "暂时缺货" : "购买") + "</button></div></article>";

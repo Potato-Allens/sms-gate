@@ -1069,7 +1069,10 @@
       '<button class="btn" type="button" data-act="shop-sync">立即同步平台列表</button>' +
       '<span class="help" id="syncStat">未开始</span></div>' +
       '<form id="shopAddForm" class="form-grid mt12">' +
-      '<label class="fld">appId<input name="app_id" placeholder="709"></label>' +
+      '<label class="fld">货源<select name="provider">' +
+      '<option value="nexsms">NexSMS 上游（海外号）</option>' +
+      '<option value="d1jiema">国内 d1jiema（实卡/虚卡）</option></select></label>' +
+      '<label class="fld">appId<input name="app_id" placeholder="709；国内填 -1 实卡 / -2 虚卡"></label>' +
       '<label class="fld">平台名称<input name="name" placeholder="WhatsApp"></label>' +
       '<label class="fld">分类（运营商）<input name="cate_name" placeholder="美国(实卡)"></label>' +
       '<label class="fld">卡类型<select name="ptype"><option value="1">首次卡</option><option value="2">重启卡</option><option value="3">续费卡</option></select></label>' +
@@ -1106,7 +1109,8 @@
       const f = e.target;
       const d = await api("/admin/api/shop/product/add", { method: "POST", body: {
         app_id: f.app_id.value, name: f.name.value, cate_name: f.cate_name.value,
-        ptype: f.ptype.value, price_yuan: f.price_yuan.value } });
+        ptype: f.ptype.value, price_yuan: f.price_yuan.value,
+        provider: f.provider ? f.provider.value : "nexsms" } });
       toast(d.ok ? "商品已添加" : (d.error || "添加失败"), d.ok ? "good" : "bad");
       if (d.ok) { f.reset(); loadShopProducts(); }
     });
@@ -1130,20 +1134,25 @@
       const savedC = Number(p.price_cents || 0);          // 上次保存的售价（分）
       const suggest = Number(p.usd || 0) * rate;          // 建议价 = USD × 汇率
       const val = (savedC > 0 ? savedC / 100 : suggest).toFixed(2);
+      const hasUsd = Number(p.usd || 0) > 0;      // 国内货源没有美元成本，不显示建议价
       const tip = "<span class='sl-saved'>" +
-        (savedC > 0 ? "上次 ¥" + (savedC / 100).toFixed(2) : "尚未定价") +
-        "</span><br><span class='sl-sug'>建议 ¥" + suggest.toFixed(2) + "</span>";
+        (savedC > 0 ? "上次 ¥" + (savedC / 100).toFixed(2) : "尚未定价") + "</span>" +
+        (hasUsd ? "<br><span class='sl-sug'>建议 ¥" + suggest.toFixed(2) + "</span>" : "");
       return "<tr><td class='mono'>" + p.id + "</td><td>" + icoHtml(p.icon) +
         "</td><td><b>" + esc(p.name) + "</b><div class='mono small'>appId " + p.app_id +
-        " · type " + p.ptype + "</div></td><td>" + esc(p.cate_name || "—") +
-        "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" + p.success + "%</td>" +
-        "<td class='mono'>$" + Number(p.usd || 0).toFixed(3) + "</td>" +
+        " · type " + p.ptype +
+        (p.provider === "d1jiema" ? " · <span class='prov-cn'>国内 d1</span>" : "") +
+        "</div></td><td>" + esc(p.cate_name || "—") +
+        "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" +
+        (Number(p.success) > 0 ? p.success + "%" : "—") + "</td>" +
+        "<td class='mono'>" + (Number(p.usd || 0) > 0
+          ? "$" + Number(p.usd || 0).toFixed(3) : "—") + "</td>" +
         "<td class='shop-pcell'><input class='shop-price' data-id='" + p.id +
         "' data-saved='" + (savedC / 100).toFixed(2) +
         "' data-suggest='" + suggest.toFixed(2) + "' value='" + val + "'>" +
         "<div class='shop-last" + (savedC > 0 ? "" : " empty") + "' data-id='" + p.id +
         "'>" + tip + "</div>" +
-        (savedC > 0 && Math.abs(suggest - savedC / 100) > 0.004
+        (hasUsd && savedC > 0 && Math.abs(suggest - savedC / 100) > 0.004
           ? "<button class='shop-adopt' type='button' data-act='shop-adopt' data-id='" + p.id +
             "'>用建议价</button>" : "") +
         "</td><td class='mono'>" + stock + "</td><td>" + onoff +
@@ -1172,8 +1181,8 @@
     const tip = document.querySelector(".shop-last[data-id='" + inp.dataset.id + "']");
     if (tip) {
       const sug = Number(inp.dataset.suggest || 0);
-      tip.innerHTML = "<span class='sl-saved'>上次 ¥" + v.toFixed(2) +
-        "</span><br><span class='sl-sug'>建议 ¥" + sug.toFixed(2) + "</span>";
+      tip.innerHTML = "<span class='sl-saved'>上次 ¥" + v.toFixed(2) + "</span>" +
+        (sug > 0 ? "<br><span class='sl-sug'>建议 ¥" + sug.toFixed(2) + "</span>" : "");
       tip.classList.remove("empty");
       tip.classList.add("changed");
       setTimeout(() => tip.classList.remove("changed"), 1600);

@@ -255,7 +255,8 @@ CREATE TABLE IF NOT EXISTS shop_products(
   sort INTEGER NOT NULL DEFAULT 0,
   note TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'nexsms'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ix_shop_prod_key ON shop_products(app_id, ptype);
 CREATE INDEX IF NOT EXISTS ix_shop_prod_on ON shop_products(enabled, sort DESC, id);
@@ -432,6 +433,7 @@ def init() -> None:
         _addcol('nex_queue', 'card_type', "TEXT NOT NULL DEFAULT ''")
         _addcol('card_choices', 'alloc_at', "INTEGER NOT NULL DEFAULT 0")
         _addcol('cards', 'choice', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_products', 'provider', "TEXT NOT NULL DEFAULT 'nexsms'")
         try:
             c.execute("CREATE INDEX IF NOT EXISTS ix_nexq_choice ON nex_queue(status,choice,id)")
         except Exception:

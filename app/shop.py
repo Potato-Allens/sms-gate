@@ -218,6 +218,7 @@ def _product_row(p) -> dict:
         "stock": int(p["stock"] or 0),
         "price_cents": int(p["price_cents"] or 0), "price": money(p["price_cents"]),
         "enabled": int(p["enabled"] or 0), "note": p["note"] or "",
+        "provider": (p["provider"] if "provider" in p.keys() else "nexsms") or "nexsms",
     }
 
 
@@ -235,6 +236,30 @@ def visible_products(region: str = "", ctype: str = "", q: str = "") -> list:
         args += ["%" + q + "%", "%" + q + "%"]
     sql += " ORDER BY success DESC, price_cents ASC, id ASC LIMIT 500"
     return [_product_row(r) for r in db.q(sql, tuple(args))]
+
+
+# 国内实卡 / 虚卡：货源 d1jiema（按「豆包」关键词取号），appId 用负数避免和上游 ID 撞车
+CN_SEED = [
+    (-1, 1, "豆包", "国内(实卡)", "cn", 200),
+    (-2, 1, "豆包", "国内(虚拟卡)", "cn", 150),
+]
+
+
+def seed_cn_products() -> None:
+    """补上国内实卡/虚卡两个商品（仅缺失时插入，不动已有定价与开关）。"""
+    now = int(time.time())
+    for app_id, ptype, name, cate, country, price in CN_SEED:
+        try:
+            db.conn().execute(
+                "INSERT INTO shop_products(app_id,ptype,name,icon,cate_id,cate_name,country,"
+                "card_type,upstream_price_usd,success,stock,price_cents,enabled,sort,note,"
+                "created_at,updated_at,provider) "
+                "SELECT ?,?,?,?,0,?,?,?,0,0,?,?,1,0,'',?,?,'d1jiema' "
+                "WHERE NOT EXISTS (SELECT 1 FROM shop_products WHERE cate_name=? AND name=?)",
+                (app_id, ptype, name, icon_for(name), cate, country, "首次卡",
+                 9999, price, now, now, cate, name))
+        except Exception:
+            pass
 
 
 def catalog_meta() -> dict:
@@ -582,7 +607,39 @@ def _reap_pending(uid: int) -> None:
             pass
 
 
+def _cn_card_type(cate_name: str, card_type: str = "") -> str:
+    """国内商品分类 -> d1jiema cardType（实卡 / 虚卡 / 全部）。"""
+    tag = (cate_name or "") + " " + (card_type or "")
+    if "虚" in tag:
+        return "虚卡"
+    if "实" in tag:
+        return "实卡"
+    return "全部"
+
+
+def _buy_cn(p) -> dict:
+    """国内实卡/虚卡：从 d1jiema 按「豆包」关键词取一个号。"""
+    from . import d1jiema
+    if not d1jiema.enabled():
+        raise ShopError("国内通道维护中，请稍后再试", 503)
+    ct = _cn_card_type(p["cate_name"], p["card_type"])
+    try:
+        phone = d1jiema.get_phone("", ct)
+    except d1jiema.D1Busy as e:
+        raise ShopError(str(e) or "国内通道繁忙，请稍后重试", 503)
+    except d1jiema.D1Error as e:
+        raise ShopError(str(e) or "国内取号失败，请稍后重试", 502)
+    return {"phone": "+86" + phone, "upstream": "d1jiema:" + phone}
+
+
 def _buy_upstream(p) -> dict:
+    prov = ""
+    try:
+        prov = str(p["provider"] or "")
+    except Exception:
+        prov = ""
+    if prov == "d1jiema" or (p["country"] or "") == "cn":
+        return _buy_cn(p)
     payload = {
         "appId": int(p["app_id"]), "type": int(p["ptype"]), "quantity": 1,
         "expiry": int(db.get_setting("nexsms_expiry", "0") or 0),
@@ -622,6 +679,8 @@ def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
 
 def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
     now = int(time.time())
+    if not idem:
+        idem = secrets.token_hex(12)      # user_id+idem 唯一：空串不能复用
     with db.tx() as c:
         if idem:
             ex = c.execute("SELECT * FROM shop_orders WHERE user_id=? AND idem=?",
@@ -864,12 +923,15 @@ async def adm_product_add(request: Request):
     s = _admin(request)
     body = await _body(request)
     _ac(request, s, body)
+    prov = "d1jiema" if str(body.get("provider") or "") == "d1jiema" else "nexsms"
     try:
         app_id = int(body.get("app_id") or 0)
         ptype = max(1, min(3, int(body.get("ptype") or 1)))
     except Exception:
         return err("appId / 卡类型不正确")
-    if app_id <= 0:
+    if app_id == 0:
+        return err("appId 不正确")
+    if prov == "nexsms" and app_id < 0:
         return err("appId 不正确")
     name = str(body.get("name") or "").strip()[:60]
     if not name:
@@ -885,10 +947,10 @@ async def adm_product_add(request: Request):
             if ex:
                 raise ShopError("该 appId + 卡类型已存在（ID %d）" % ex["id"])
             c.execute("INSERT INTO shop_products(app_id,ptype,name,icon,cate_name,country,"
-                      "card_type,price_cents,enabled,sort,note,created_at,updated_at) "
-                      "VALUES(?,?,?,?,?,?,?,?,1,0,'',?,?)",
+                      "card_type,price_cents,enabled,sort,note,created_at,updated_at,provider) "
+                      "VALUES(?,?,?,?,?,?,?,?,1,0,'',?,?,?)",
                       (app_id, ptype, name, icon_for(name), cate_name, country,
-                       type_name(ptype), price, now, now))
+                       type_name(ptype), price, now, now, prov))
     except ShopError as e:
         return err(str(e))
     return ok()

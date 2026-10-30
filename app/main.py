@@ -36,6 +36,10 @@ SECURITY_HEADERS = {
 @app.on_event("startup")
 def _startup() -> None:
     db.init()
+    try:
+        shop.seed_cn_products()      # 国内实卡/虚卡商品（d1jiema 货源）
+    except Exception:
+        pass
     security.purge_expired()
     # Queue is retired: everyone allocates directly; leftovers are closed once.
     nexq.retire_queue()
