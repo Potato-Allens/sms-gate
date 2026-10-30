@@ -1069,7 +1069,7 @@
       '<label class="fld">美元汇率（1 USD = ? CNY）<input name="shop_usd_cny" value="' + esc(s.shop_usd_cny || "7.20") + '"></label>' +
       '<label class="fld">允许缺货下单<select name="shop_allow_oos"><option value="0"' + sel("0", s.shop_allow_oos === "1" ? "x" : "0") + ">不允许（推荐）</option><option value=\"1\"" + sel("1", s.shop_allow_oos) + ">允许</option></select></label>" +
       '<label class="fld">卡密有效期（天，0=永久）<input name="shop_order_days" value="' + esc(s.shop_order_days || "0") + '"></label>' +
-      '<label class="fld">普通号默认可用时长（分钟）<input name="reg_ttl_min" value="' + esc(s.reg_ttl_min || "20") + '"></label>' +
+      '<label class="fld">普通号预估可用时长（分钟，只做展示预估、不作废号码）<input name="reg_ttl_min" value="' + esc(s.reg_ttl_min || "20") + '"></label>' +
       '<label class="fld">每人每小时下单上限<input name="shop_buy_per_hour" value="' + esc(s.shop_buy_per_hour || "20") + '"></label>' +
       '<label class="fld">每人 24 小时下单上限（0=不限）<input name="shop_max_orders_per_user" value="' + esc(s.shop_max_orders_per_user || "0") + '"></label>' +
       '<label class="fld">最低充值额（元，充值码面额下限）<input name="shop_min_recharge" value="' + esc(s.shop_min_recharge || "5") + '"></label>' +
