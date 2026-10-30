@@ -1035,6 +1035,7 @@
     if (!ov.ok) { content.innerHTML = '<div class="empty">' + esc(ov.error) + "</div>"; return; }
     const s = cf.settings || {};
     const on = (v) => (String(v) === "1" ? " selected" : "");
+    const sel = (val, cur) => (String(val) === String(cur) ? " selected" : "");
     content.innerHTML =
       '<div class="stats">' +
       stat("注册用户", ov.users, "今日新增 " + ov.users_today, "b") +
@@ -1048,11 +1049,12 @@
       '<form id="shopCfgForm" class="card mt18">' +
       '<div class="card-title"><h3>商城设置</h3><span class="hint">人民币定价结算，美元单价仅作参考</span></div>' +
       '<div class="form-grid">' +
-      '<label class="fld">商城开关<select name="shop_on"><option value="1"' + on(s.shop_on || "1") + ">营业中</option><option value=\"0\"" + on(s.shop_on === "0" ? "0" : "x") + ">维护中（前端只读）</option></select></label>" +
-      '<label class="fld">开放注册<select name="shop_register_on"><option value="1"' + on(s.shop_register_on || "1") + ">允许</option><option value=\"0\"" + on(s.shop_register_on === "0" ? "0" : "x") + ">关闭</option></select></label>" +
+      '<label class="fld">商城开关<select name="shop_on"><option value="1"' + sel("1", s.shop_on || "1") + ">营业中</option><option value=\"0\"" + sel("0", s.shop_on) + ">维护中（前端只读）</option></select></label>" +
+      '<label class="fld">开放注册<select name="shop_register_on"><option value="1"' + sel("1", s.shop_register_on || "1") + ">允许</option><option value=\"0\"" + sel("0", s.shop_register_on) + ">关闭</option></select></label>" +
+      '<label class="fld">现货专区<select name="shop_stock_on"><option value="1"' + sel("1", s.shop_stock_on === "1" ? "1" : "x") + ">展示（先卖库存）</option><option value=\"0\"" + sel("0", s.shop_stock_on === "0" ? "0" : "x") + ">关闭（不显示）</option></select></label>" +
+      '<label class="fld">注册必须充值码<select name="shop_register_need_code"><option value="1"' + sel("1", s.shop_register_need_code === "1" ? "1" : "x") + ">必须</option><option value=\"0\"" + sel("0", s.shop_register_need_code === "0" ? "0" : "x") + ">可免码注册</option></select></label>" +
       '<label class="fld">美元汇率（1 USD = ? CNY）<input name="shop_usd_cny" value="' + esc(s.shop_usd_cny || "7.20") + '"></label>' +
-      '<label class="fld">同步默认加价（%）<input name="shop_markup_pct" value="' + esc(s.shop_markup_pct || "40") + '"></label>' +
-      '<label class="fld">允许缺货下单<select name="shop_allow_oos"><option value="0"' + on(s.shop_allow_oos === "1" ? "x" : "0") + ">不允许（推荐）</option><option value=\"1\"" + on(s.shop_allow_oos) + ">允许</option></select></label>" +
+      '<label class="fld">允许缺货下单<select name="shop_allow_oos"><option value="0"' + sel("0", s.shop_allow_oos === "1" ? "x" : "0") + ">不允许（推荐）</option><option value=\"1\"" + sel("1", s.shop_allow_oos) + ">允许</option></select></label>" +
       '<label class="fld">卡密有效期（天，0=永久）<input name="shop_order_days" value="' + esc(s.shop_order_days || "0") + '"></label>' +
       '<label class="fld">每人每小时下单上限<input name="shop_buy_per_hour" value="' + esc(s.shop_buy_per_hour || "20") + '"></label>' +
       '<label class="fld">同步每个分类页数<input name="shop_sync_pages" value="' + esc(s.shop_sync_pages || "1") + '"></label>' +
@@ -1088,7 +1090,8 @@
       const f = e.target;
       const body = {};
       ["shop_on", "shop_register_on", "shop_usd_cny", "shop_markup_pct", "shop_allow_oos",
-       "shop_order_days", "shop_buy_per_hour", "shop_sync_pages", "shop_sync_cates"].forEach((k) => {
+       "shop_order_days", "shop_buy_per_hour", "shop_sync_pages", "shop_sync_cates",
+       "shop_stock_on", "shop_register_need_code"].forEach((k) => {
         if (f[k]) body[k] = f[k].value;
       });
       const d = await api("/admin/api/shop/settings", { method: "POST", body });
