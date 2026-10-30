@@ -219,6 +219,8 @@ def _product_row(p) -> dict:
         "price_cents": int(p["price_cents"] or 0), "price": money(p["price_cents"]),
         "enabled": int(p["enabled"] or 0), "note": p["note"] or "",
         "provider": (p["provider"] if "provider" in p.keys() else "nexsms") or "nexsms",
+        "sms_keyword": (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or "",
+        "sms_prefix": (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or "",
     }
 
 
@@ -693,7 +695,8 @@ def _buy_upstream(p) -> dict:
 
 
 def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
-                  actor: str, card_type: str = "") -> dict:
+                  actor: str, card_type: str = "", sms_keyword: str = "",
+                  sms_prefix: str = "") -> dict:
     """One relay card per order (no batch row): 卡号:+phone----https://api.../smsrecord?token=..."""
     now = int(time.time())
     with db.tx() as c:
@@ -701,9 +704,10 @@ def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
         expires = now + days * 86400 if days else 0
         cur = c.execute(
             "INSERT INTO relay_cards(token,phone,country,upstream_enc,note,status,batch_id,"
-            "created_at,created_by,expires_at,card_type) VALUES(?,?,?,?,?,'active',0,?,?,?,?)",
+            "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix) "
+            "VALUES(?,?,?,?,?,'active',0,?,?,?,?,?,?)",
             (token, phone, country, security.enc(upstream), note[:120], now, actor,
-             expires, card_type[:16]))
+             expires, card_type[:16], (sms_keyword or "")[:40], (sms_prefix or "")[:40]))
         return {"id": cur.lastrowid, "token": token, "expires_at": expires,
                 "line": relay_api._line(phone, token)}
 
@@ -753,8 +757,10 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
         ctype_now = p["card_type"] or ""
         if (p["country"] or "") == "cn":
             ctype_now = cn_sim_type(got["phone"])
+        pkw = (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or ""
+        ppx = (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or ""
         row = _create_relay(got["phone"], got["upstream"], p["country"] or "", note,
-                            days, "shop:" + str(uid), ctype_now)
+                            days, "shop:" + str(uid), ctype_now, pkw, ppx)
         done = int(time.time())
         db.conn().execute(
             "UPDATE shop_orders SET status='done', relay_card_id=?, relay_token=?, phone=?, "
@@ -942,6 +948,12 @@ async def adm_product_save(request: Request):
     if body.get("enabled") is not None:
         sets.append("enabled=?")
         args.append(1 if str(body.get("enabled")) in ("1", "true", "on") else 0)
+    if "sms_keyword" in body:
+        sets.append("sms_keyword=?")
+        args.append(str(body.get("sms_keyword") or "").strip()[:40])
+    if "sms_prefix" in body:
+        sets.append("sms_prefix=?")
+        args.append(str(body.get("sms_prefix") or "").strip()[:40])
     if not sets:
         return err("没有需要修改的字段")
     sets.append("updated_at=?")
@@ -981,10 +993,12 @@ async def adm_product_add(request: Request):
             if ex:
                 raise ShopError("该 appId + 卡类型已存在（ID %d）" % ex["id"])
             c.execute("INSERT INTO shop_products(app_id,ptype,name,icon,cate_name,country,"
-                      "card_type,price_cents,enabled,sort,note,created_at,updated_at,provider) "
-                      "VALUES(?,?,?,?,?,?,?,?,1,0,'',?,?,?)",
+                      "card_type,price_cents,enabled,sort,note,created_at,updated_at,provider,"
+                      "sms_keyword,sms_prefix) VALUES(?,?,?,?,?,?,?,?,1,0,'',?,?,?,?,?)",
                       (app_id, ptype, name, icon_for(name), cate_name, country,
-                       type_name(ptype), price, now, now, prov))
+                       type_name(ptype), price, now, now, prov,
+                       str(body.get("sms_keyword") or "").strip()[:40],
+                       str(body.get("sms_prefix") or "").strip()[:40]))
     except ShopError as e:
         return err(str(e))
     return ok()
@@ -1345,13 +1359,16 @@ def _extract_links(text: str):
     return keys, toks
 
 
-def _stock_insert(c, kind, ref_id, link, phone, country, cate, ctype, price, batch, note="") -> bool:
+def _stock_insert(c, kind, ref_id, link, phone, country, cate, ctype, price, batch, note="",
+                  sms_keyword="", sms_prefix="") -> bool:
     try:
         c.execute(
             "INSERT INTO shop_stock(kind,ref_id,link,phone,country,cate_name,card_type,price_cents,"
-            "status,batch,note,created_at) VALUES(?,?,?,?,?,?,?,?,'available',?,?,?)",
+            "status,batch,note,created_at,sms_keyword,sms_prefix) "
+            "VALUES(?,?,?,?,?,?,?,?,'available',?,?,?,?,?)",
             (kind, int(ref_id), link, phone or "", country or "", cate or "", ctype or "",
-             int(price), batch, note[:120], int(time.time())))
+             int(price), batch, note[:120], int(time.time()),
+             (sms_keyword or "")[:40], (sms_prefix or "")[:40]))
         return True
     except sqlite3.IntegrityError:
         return False
@@ -1451,7 +1468,8 @@ async def adm_stock_recover(request: Request):
                 if not rt and (r["country"] or country) == "cn":
                     rt = cn_sim_type(r["phone"])
                 if _stock_insert(c, "relay", r["id"], line, r["phone"], r["country"] or country,
-                                 cate, rt, price, batch, note):
+                                 cate, rt, price, batch, note,
+                                 r["sms_keyword"] or "", r["sms_prefix"] or ""):
                     added += 1
                 else:
                     dup += 1
@@ -1492,7 +1510,8 @@ async def adm_stock_recover(request: Request):
                     rt2 = cn_sim_type(rc["phone"])
                 if _stock_insert(c, "relay", rc["id"], line, rc["phone"],
                                  rc["country"] or country, cate,
-                                 rt2, price, batch, note):
+                                 rt2, price, batch, note,
+                                 rc["sms_keyword"] or "", rc["sms_prefix"] or ""):
                     added += 1
                 else:
                     dup += 1

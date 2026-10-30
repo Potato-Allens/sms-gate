@@ -434,6 +434,12 @@ def init() -> None:
         _addcol('card_choices', 'alloc_at', "INTEGER NOT NULL DEFAULT 0")
         _addcol('cards', 'choice', "TEXT NOT NULL DEFAULT ''")
         _addcol('shop_products', 'provider', "TEXT NOT NULL DEFAULT 'nexsms'")
+        _addcol('relay_cards', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
+        _addcol('relay_cards', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_products', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_products', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_stock', 'sms_keyword', "TEXT NOT NULL DEFAULT ''")
+        _addcol('shop_stock', 'sms_prefix', "TEXT NOT NULL DEFAULT ''")
         try:
             c.execute("CREATE INDEX IF NOT EXISTS ix_nexq_choice ON nex_queue(status,choice,id)")
         except Exception:

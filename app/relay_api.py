@@ -195,14 +195,14 @@ def _extract_code(text: str) -> str:
     return m.group(1) if m else ""
 
 
-def _fetch(url: str, timeout: int = 15):
+def _fetch(url: str, timeout: int = 15, kw: str = ""):
     """GET the upstream SMS URL with SSRF guards; return (ok, reason, text)."""
     if url.startswith("d1jiema:"):
         from . import d1jiema
         try:
             parts = url.split(":", 2)
             phone = parts[1] if len(parts) > 1 else ""
-            text = d1jiema.clean(d1jiema.get_msg(phone, ""))
+            text = d1jiema.clean(d1jiema.get_msg(phone, kw or ""))
             return True, "", (text or "0|0")
         except Exception:
             return False, "upstream_unreachable", ""
@@ -256,10 +256,12 @@ def _create_sync(items, note: str, days: int, actor: str):
             expires = now + days * 86400 if days else 0
             cur2 = c.execute(
                 "INSERT INTO relay_cards(token,phone,country,upstream_enc,note,status,batch_id,"
-                "created_at,created_by,expires_at,card_type) VALUES(?,?,?,?,?,'active',?,?,?,?,?)",
+                "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix) "
+                "VALUES(?,?,?,?,?,'active',?,?,?,?,?,?,?)",
                 (token, it["phone"], it.get("country", ""), security.enc(it["upstream"]),
                  (it.get("note") or note)[:120], bid, now, actor, expires,
-                 (it.get("card_type") or "")[:16]))
+                 (it.get("card_type") or "")[:16], (it.get("sms_keyword") or "")[:40],
+                 (it.get("sms_prefix") or "")[:40]))
             out.append({"id": cur2.lastrowid, "phone": it["phone"], "token": token,
                         "expires_at": expires, "line": _line(it["phone"], token)})
     return batch_no, out
@@ -275,6 +277,8 @@ async def relay_create(request: Request):
     _csrf(request, s, body)
     text = str(body.get("lines") or "")
     note = str(body.get("note") or "")[:120]
+    kw = str(body.get("sms_keyword") or "").strip()[:40]
+    pref = str(body.get("sms_prefix") or "").strip()[:40]
     try:
         days = max(0, min(3650, int(body.get("expires_days") or 0)))
     except Exception:
@@ -284,6 +288,9 @@ async def relay_create(request: Request):
     items, bad = parse_lines(text)
     if not items:
         return err("没有解析到有效号码，格式应为 卡号:+手机号----接码地址", 400, bad=bad)
+    for it in items:
+        it["sms_keyword"] = kw
+        it["sms_prefix"] = pref
     good, rejected = await run_in_threadpool(_checked, items)
     bad += rejected
     if not good:
@@ -411,6 +418,8 @@ async def relay_allocate(request: Request):
     except Exception:
         days = 0
     note = str(body.get("note") or "")[:120]
+    kw = str(body.get("sms_keyword") or "").strip()[:40]
+    pref = str(body.get("sms_prefix") or "").strip()[:40]
     items, bad = await run_in_threadpool(_allocate_sync, choice, count)
     if not items:
         why = bad[0]["why"] if bad else "上游暂无可用号码"
@@ -418,7 +427,8 @@ async def relay_allocate(request: Request):
     batch_no, rows = await run_in_threadpool(
         _create_sync, [{"phone": it["phone"], "upstream": it["upstream"],
                         "country": it["country"], "note": note,
-                        "card_type": it.get("card_type") or ""} for it in items],
+                        "card_type": it.get("card_type") or "",
+                        "sms_keyword": kw, "sms_prefix": pref} for it in items],
         note, days, s["username"])
     with db.tx() as c:
         for it in items:
@@ -591,7 +601,18 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
     upstream = security.dec(row["upstream_enc"])
     if not upstream:
         return PlainTextResponse("error|relay_broken", status_code=500, headers=CORS)
-    good, why, text = await run_in_threadpool(_fetch, upstream)
+    kw = (row["sms_keyword"] if "sms_keyword" in row.keys() else "") or ""
+    pref = (row["sms_prefix"] if "sms_prefix" in row.keys() else "") or ""
+    good, why, text = await run_in_threadpool(_fetch, upstream, 15, kw)
+    if good and pref and upstream.startswith("d1jiema:"):
+        # 只把属于该平台的短信交给买家：不匹配前缀且不含关键词 → 当作还没收到
+        try:
+            from .providers import _nex_prefix_ok
+            t = (text or "").strip()
+            if t and t != "0|0" and not _nex_prefix_ok(t, pref) and not (kw and kw in t):
+                text = "0|0"
+        except Exception:
+            pass
     if not good:
         security.audit("relay_error", "warn", ip=ip, detail={"id": row["id"], "why": why})
         return PlainTextResponse("error|" + why, status_code=502, headers=CORS)

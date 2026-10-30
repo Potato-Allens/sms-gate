@@ -149,6 +149,7 @@
     if (!el) return;
     const act = el.dataset.act;
     if (act === "copy") { copy(el.dataset.text || ""); return; }
+    if (act === "modal-close") { closeModal(); return; }
     if (/^(shop-|ord-|rc-|u-|stock-)/.test(act) || act === "copy-all-codes" || act === "dl-codes") {
       shopAction(act, el); return;
     }
@@ -349,6 +350,8 @@
     let base = "https://api.12456.cfd";
     const cfg = await api("/admin/api/settings");
     if (cfg.ok && cfg.settings && cfg.settings.relay_base) base = cfg.settings.relay_base;
+    const kwDef = (cfg.ok && cfg.settings && cfg.settings.d1jiema_keyword) || "豆包";
+    const pxDef = (cfg.ok && cfg.settings && cfg.settings.d1jiema_sms_prefix) || "[豆包]";
     content.innerHTML =
       '<div class="card" id="relayRecent"><div class="card-title"><h3>最近批次 · 找回</h3>' +
       '<span class="hint">忘记复制也不丢 · 任何一批都能重新导出</span></div>' +
@@ -364,6 +367,8 @@
       opt("hk", "香港") + opt("cn_real", "国内实卡") + opt("cn_virtual", "国内虚拟卡") + "</select></label>" +
       '<label class="fld">数量<input name="count" type="number" min="1" max="50" value="1"></label>' +
       '<label class="fld">有效期（天，0 为永久）<input name="expires_days" type="number" min="0" max="3650" value="0"></label>' +
+      '<label class="fld">项目关键词<input name="sms_keyword" placeholder="豆包 / TikTok / 平台名" value="' + esc(kwDef) + '"></label>' +
+      '<label class="fld">短信前缀（只收以此开头，可空）<input name="sms_prefix" placeholder="[豆包]" value="' + esc(pxDef) + '"></label>' +
       '<label class="fld">备注<input name="note" maxlength="120" placeholder="渠道 / 批次"></label>' +
       '<div class="full"><button class="btn primary" type="submit">购买并生成直链卡</button>' +
       '<span class="help">会真实向上游购买号码（产生费用），生成 <code>卡号:+手机号----' + esc(base) +
@@ -373,6 +378,8 @@
       '<form id="relayForm" class="form-grid">' +
       '<label class="fld full">粘贴上游号码（每行一条，必填）<textarea name="lines" rows="6" placeholder="每行一条，例如：&#10;卡号:+8613800000000----https://你的上游地址/smsrecord?token=你的token"></textarea></label>' +
       '<label class="fld">有效期（天，0 为永久）<input name="expires_days" type="number" min="0" max="3650" value="0"></label>' +
+      '<label class="fld">项目关键词（可空）<input name="sms_keyword" placeholder="' + esc(kwDef) + '"></label>' +
+      '<label class="fld">短信前缀（可空）<input name="sms_prefix" placeholder="' + esc(pxDef) + '"></label>' +
       '<label class="fld">备注<input name="note" maxlength="120" placeholder="渠道 / 批次"></label>' +
       '<div class="full"><button class="btn primary" type="submit">生成直链卡</button>' +
       '<span class="help">生成后统一替换为 <code>' + esc(base) + '/smsrecord?token=…</code>，买家看不到上游域名；同一链接可反复取码。</span></div>' +
@@ -512,6 +519,8 @@
     const d = await api("/admin/api/relay/allocate", { method: "POST", body: {
       choice: f.choice.value, count: n,
       expires_days: Number(f.expires_days.value), note: f.note.value.trim(),
+      sms_keyword: f.sms_keyword ? f.sms_keyword.value.trim() : "",
+      sms_prefix: f.sms_prefix ? f.sms_prefix.value.trim() : "",
     } });
     btn.disabled = false;
     btn.textContent = old;
@@ -532,6 +541,8 @@
     btn.disabled = true;
     const d = await api("/admin/api/relay/create", { method: "POST", body: {
       lines: raw, note: f.note.value.trim(), expires_days: Number(f.expires_days.value),
+      sms_keyword: f.sms_keyword ? f.sms_keyword.value.trim() : "",
+      sms_prefix: f.sms_prefix ? f.sms_prefix.value.trim() : "",
     } });
     btn.disabled = false;
     if (!d.ok) { toast(d.error || "生成失败", "bad"); return; }
@@ -1077,6 +1088,8 @@
       '<label class="fld">分类（运营商）<input name="cate_name" placeholder="美国(实卡)"></label>' +
       '<label class="fld">卡类型<select name="ptype"><option value="1">首次卡</option><option value="2">重启卡</option><option value="3">续费卡</option></select></label>' +
       '<label class="fld">售价（元）<input name="price_yuan" placeholder="12.00"></label>' +
+      '<label class="fld">项目关键词<input name="sms_keyword" placeholder="豆包（短信里含此词）"></label>' +
+      '<label class="fld">短信前缀<input name="sms_prefix" placeholder="[豆包]（可空）"></label>' +
       '<div class="fld"><button class="btn ghost" type="submit">手动添加商品</button></div>' +
       "</form></div>" +
 
@@ -1110,6 +1123,8 @@
       const d = await api("/admin/api/shop/product/add", { method: "POST", body: {
         app_id: f.app_id.value, name: f.name.value, cate_name: f.cate_name.value,
         ptype: f.ptype.value, price_yuan: f.price_yuan.value,
+        sms_keyword: f.sms_keyword ? f.sms_keyword.value.trim() : "",
+        sms_prefix: f.sms_prefix ? f.sms_prefix.value.trim() : "",
         provider: f.provider ? f.provider.value : "nexsms" } });
       toast(d.ok ? "商品已添加" : (d.error || "添加失败"), d.ok ? "good" : "bad");
       if (d.ok) { f.reset(); loadShopProducts(); }
@@ -1143,7 +1158,12 @@
         " · type " + p.ptype +
         (p.provider === "d1jiema" ? " · <span class='prov-cn'>国内 d1</span>" : "") +
         "</div></td><td>" + esc(p.cate_name || "—") +
-        "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" +
+        "</td><td>" + esc(p.card_type || "—") +
+        "</td><td class='mono small'>" + esc(p.sms_keyword || "豆包") +
+        (p.sms_prefix ? "<br>" + esc(p.sms_prefix) : "") +
+        " <button class='btn mini' data-act='shop-kw' data-id='" + p.id +
+        "' data-kw='" + esc(p.sms_keyword || "") + "' data-pref='" + esc(p.sms_prefix || "") +
+        "'>改</button></td><td class='mono'>" +
         (Number(p.success) > 0 ? p.success + "%" : "—") + "</td>" +
         "<td class='mono'>" + (Number(p.usd || 0) > 0
           ? "$" + Number(p.usd || 0).toFixed(3) : "—") + "</td>" +
@@ -1163,9 +1183,9 @@
         "'>删除</button></td></tr>";
     }).join("");
     box.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th></th><th>平台</th>' +
-      "<th>运营商</th><th>卡类型</th><th>成功率</th><th>USD 参考</th><th>售价 ¥</th><th>库存</th>" +
+      "<th>运营商</th><th>卡类型</th><th>短信关键词</th><th>成功率</th><th>USD 参考</th><th>售价 ¥</th><th>库存</th>" +
       "<th>状态</th><th>操作</th></tr></thead><tbody>" +
-      (rows || "<tr><td colspan=11 class='empty'>还没有商品，点上方「立即同步平台列表」</td></tr>") +
+      (rows || "<tr><td colspan=12 class='empty'>还没有商品，点上方「立即同步平台列表」</td></tr>") +
       "</tbody></table></div>" + pager(d.total, d.page, d.size);
     shopSyncDirty();
   }
@@ -1577,6 +1597,30 @@
       const d = await api("/admin/api/shop/stock/remove", { method: "POST", body: { id } });
       toast(d.ok ? "已移除" : (d.error || "操作失败"), d.ok ? "good" : "bad");
       return d.ok && pageStock();
+    }
+    if (act === "shop-kw") {
+      const kw = el.dataset.kw || "";
+      const pref = el.dataset.pref || "";
+      openModal("短信关键词 · 商品 #" + id,
+        '<div class="form-grid">' +
+        '<label class="fld">项目关键词（短信内容含此词才算这个平台，例如 豆包）' +
+        '<input id="kwEditInput" value="' + esc(kw) + '" placeholder="豆包"></label>' +
+        '<label class="fld">短信前缀（只收以此开头的短信，留空不限）' +
+        '<input id="pxEditInput" value="' + esc(pref) + '" placeholder="[豆包]"></label>' +
+        '<div class="full"><button class="btn primary" type="button" data-act="shop-kw-save" data-id="' + id +
+        '">保存</button> <button class="btn ghost" type="button" data-act="modal-close">取消</button></div>' +
+        "</div>", true);
+      return;
+    }
+    if (act === "shop-kw-save") {
+      const kwInp = $("kwEditInput"), pxInp = $("pxEditInput");
+      const d = await api("/admin/api/shop/product", { method: "POST", body: {
+        id, sms_keyword: kwInp ? kwInp.value.trim() : "",
+        sms_prefix: pxInp ? pxInp.value.trim() : "" } });
+      if (!d.ok) { toast(d.error || "保存失败", "bad"); return; }
+      toast("已保存短信关键词", "good");
+      closeModal();
+      return loadShopProducts();
     }
     if (act === "shop-adopt") {
       const inp = document.querySelector(".shop-price[data-id='" + id + "']");
