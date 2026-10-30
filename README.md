@@ -34,6 +34,7 @@
 官网 `/` 点「购买号码」进入 `/shop`，一套完整的自营商城：
 
 - **平台货架**：从上游优选目录同步，只收录**有成功率**的平台，展示图标、平台名、运营商、卡类型、成功率、库存与人民币售价
+- **真实品牌图标**：`app/static/icons/` 内置 46+ 个平台官方 Logo（Simple Icons 品牌色 SVG + Google favicon PNG 兜底），本地静态文件、不依赖外部 CDN，CSP 仍是 `img-src 'self' data:`；新增品牌跑 `python tools/build_icons.py --update-db`
 - **双维度筛选**：运营商（美国实卡 / 美国虚拟卡 / 英国 / 香港 / 加拿大 / 印尼 …）× 卡类型（首次卡 / 重启卡 / 续费卡），支持平台搜索
 - **账号体系**：注册 / 登录 / 改密（PBKDF2-SHA256），HttpOnly 会话 + CSRF，登录爆破锁定
 - **充值码**：后台批量生成（`SG-XXXX-XXXX-XXXX-XXXX`），只存 SHA-256，一次性核销，可设面额、有效期、批次并导出
