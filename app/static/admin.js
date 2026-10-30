@@ -1446,8 +1446,8 @@
       '<label class="fld">本次最多回收<input name="limit" value="50"></label>' +
       '<label class="fld">只回收 N 天前创建（0=不限）<input name="days" value="0"></label>' +
       '<label class="fld">备注<input name="note" placeholder="可选，例如 10 月回收批次"></label>' +
-      '<label class="fld full">粘贴卡密链接（每行一条，仅「粘贴」模式需要）' +
-      '<textarea name="text" rows="5" placeholder="https://12456.cfd/c/XXXX&#10;卡号:+17798001455----https://api.12456.cfd/smsrecord?token=..."></textarea></label>' +
+      '<label class="fld full">粘贴卡密链接（仅「粘贴」模式需要；整段复制也行，时间/已售出等文字会自动忽略）' +
+      '<textarea name="text" rows="5" placeholder="https://12456.cfd/c/XXXX-XXXX-XXXX-XXXX&#10;卡号:+17798001455----https://api.12456.cfd/smsrecord?token=...&#10;（可整段粘贴，垃圾文字不用删）"></textarea></label>' +
       '<div class="fld full"><button class="btn primary" type="submit">开始回收</button>' +
       '<button class="btn ghost" type="button" data-act="stock-preview" style="margin-left:8px">预览可回收数量</button>' +
       '<div class="help" id="stockHint">同一「运营商 + 卡类型」统一售价；卡密链接必须粘贴上传（库里只存哈希，明文无法还原）。</div></div>' +
@@ -1506,8 +1506,12 @@
         ? "跳过：" + d.bad.join(" / ") : (d.error || "回收失败");
       return;
     }
-    toast("已回收 " + d.added + " 个" + (d.dup ? "（重复 " + d.dup + "）" : "") +
-      "，在库 " + d.available, "good");
+    const skip = (d.bad && d.bad.length) ? ("，跳过 " + d.bad.length + " 条") : "";
+    toast("识别 " + (d.parsed || (d.added + d.dup)) + " 条，已回收 " + d.added + " 个" +
+      (d.dup ? "（重复 " + d.dup + "）" : "") + skip, "good");
+    if (hint) hint.textContent = (d.bad && d.bad.length)
+      ? ("入库 " + d.added + " 个" + skip + "：" + d.bad.slice(0, 6).join(" / "))
+      : ("入库 " + d.added + " 个，批次 " + d.batch);
     pageStock();
   }
 
@@ -1677,6 +1681,40 @@
       return;
     }
   }
+  // 粘贴卡密链接时自动剔除垃圾文字（时间、已售出、备注…），只留识别到的链接
+  function cleanCardText(text) {
+    const t = String(text || "").replace(/[\u200b-\u200f\u2028\u2029\ufeff]/g, "");
+    const out = [], seen = {};
+    const host = location.host || "12456.cfd";
+    let m;
+    const reC = /\/c\/([0-9A-Za-z][0-9A-Za-z-]{7,63})/gi;
+    while ((m = reC.exec(t))) {
+      const k = m[1].replace(/^-+|-+$/g, "").toUpperCase();
+      if (!seen["c" + k]) { seen["c" + k] = 1; out.push("https://" + host + "/c/" + k); }
+    }
+    const reT = /token=([0-9a-fA-F]{16,64})/gi;
+    while ((m = reT.exec(t))) {
+      const v = m[1].toLowerCase();
+      if (!seen["t" + v]) { seen["t" + v] = 1; out.push("https://api." + host + "/smsrecord?token=" + v); }
+    }
+    return out.join("\n");
+  }
+
+  document.addEventListener("paste", (e) => {
+    const ta = e.target;
+    if (!ta || ta.tagName !== "TEXTAREA" || ta.name !== "text" || !ta.closest("#stockForm")) return;
+    const raw = ((e.clipboardData || window.clipboardData) || { getData: () => "" })
+      .getData("text") || "";
+    const cleaned = cleanCardText(raw);
+    if (!cleaned) return;                 // 没识别到链接就按普通粘贴处理
+    e.preventDefault();
+    const s0 = ta.selectionStart, s1 = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s0) + cleaned + ta.value.slice(s1);
+    ta.selectionStart = ta.selectionEnd = s0 + cleaned.length;
+    const n = cleaned.split("\n").filter(Boolean).length;
+    toast("已自动剔除无关文字，保留 " + n + " 条链接", "good");
+  });
+
   // 售价框输入即时高亮（橙色边框）并刷新「未保存 n 项」
   document.addEventListener("input", (e) => {
     const inp = e.target;

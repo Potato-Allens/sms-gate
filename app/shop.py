@@ -1289,6 +1289,28 @@ def _card_key_hash(key: str) -> str:
     return hashlib.sha256(("sg:" + key).encode()).hexdigest()
 
 
+_RE_C_LINK = re.compile(r"/c/([0-9A-Za-z][0-9A-Za-z-]{7,63})", re.I)
+_RE_TOKEN = re.compile(r"token=([0-9a-fA-F]{16,64})", re.I)
+_RE_INVIS = re.compile(r"[\u200b-\u200f\u2028\u2029\ufeff]")
+
+
+def _extract_links(text: str):
+    """从任意粘贴文本里挑出 /c/<卡密> 和 token=<直链>，其它文字（时间、状态、备注）自动忽略。"""
+    t = _RE_INVIS.sub("", str(text or ""))
+    keys, seen, toks, seen2 = [], set(), [], set()
+    for m in _RE_C_LINK.finditer(t):
+        k = m.group(1).strip("-").upper()
+        if len(k) >= 8 and k not in seen:
+            seen.add(k)
+            keys.append(k)
+    for m in _RE_TOKEN.finditer(t):
+        v = m.group(1).lower()
+        if v not in seen2:
+            seen2.add(v)
+            toks.append(v)
+    return keys, toks
+
+
 def _stock_insert(c, kind, ref_id, link, phone, country, cate, ctype, price, batch, note="") -> bool:
     try:
         c.execute(
@@ -1360,6 +1382,7 @@ async def adm_stock_recover(request: Request):
     now = int(time.time())
     added = dup = 0
     bad = []
+    keys, toks = [], []
     # 同分组统一售价，避免同货不同价
     try:
         db.conn().execute("UPDATE shop_stock SET price_cents=? WHERE status='available' "
@@ -1394,60 +1417,49 @@ async def adm_stock_recover(request: Request):
                     dup += 1
     else:
         text = str(body.get("text") or "")
-        lines = [x.strip() for x in text.splitlines() if x.strip()][:600]
-        if not lines:
-            return err("请粘贴卡密链接（每行一条），或改用「自动回收直链卡」")
+        keys, toks = _extract_links(text)
+        if not keys and not toks:
+            return err("没识别到卡密链接：支持 https://…/c/XXXX-XXXX-XXXX-XXXX 和 "
+                       "卡号:…----…?token=…；时间、已售出、备注等文字会自动忽略", 400)
         with db.tx() as c:
-            for raw in lines:
-                item = raw.strip().strip("<>\"'")
-                if "/c/" in item.lower():
-                    key = _norm_card_key(item)
-                    if len(key) < 8:
-                        bad.append(item[:60])
-                        continue
-                    card = c.execute("SELECT * FROM cards WHERE key_hash=?",
-                                     (_card_key_hash(key),)).fetchone()
-                    if not card:
-                        bad.append(item[:60])
-                        continue
-                    if card["status"] != "active":
-                        bad.append("已停用:" + item[:50])
-                        continue
-                    if int(card["used_codes"] or 0) >= int(card["max_codes"] or 1):
-                        bad.append("已使用:" + item[:50])
-                        continue
-                    link = _site() + "/c/" + key
-                    ctype2 = ctype or (card["card_type"] if "card_type" in card.keys() else "") or ""
-                    if _stock_insert(c, "card", card["id"], link, "", country, cate, ctype2,
-                                     price, batch, note):
-                        added += 1
-                    else:
-                        dup += 1
-                elif "----" in item:
-                    m = re.search(r"token=([0-9a-fA-F]{16,64})", item)
-                    if not m:
-                        bad.append(item[:60])
-                        continue
-                    rc = c.execute("SELECT * FROM relay_cards WHERE token=?",
-                                   (m.group(1),)).fetchone()
-                    if not rc:
-                        bad.append("找不到直链:" + item[:50])
-                        continue
-                    line = relay_api._line(rc["phone"], rc["token"])
-                    if _stock_insert(c, "relay", rc["id"], line, rc["phone"],
-                                     rc["country"] or country, cate,
-                                     ctype or (rc["card_type"] or ""), price, batch, note):
-                        added += 1
-                    else:
-                        dup += 1
+            for key in keys[:600]:
+                card = c.execute("SELECT * FROM cards WHERE key_hash=?",
+                                 (_card_key_hash(key),)).fetchone()
+                if not card:
+                    bad.append("不在本站:" + key)
+                    continue
+                if card["status"] != "active":
+                    bad.append(("已售出:" if card["status"] == "used" else "已停用:") + key)
+                    continue
+                if int(card["used_codes"] or 0) >= int(card["max_codes"] or 1):
+                    bad.append("已使用:" + key)
+                    continue
+                link = _site() + "/c/" + key
+                ctype2 = ctype or (card["card_type"] if "card_type" in card.keys() else "") or ""
+                if _stock_insert(c, "card", card["id"], link, "", country, cate, ctype2,
+                                 price, batch, note):
+                    added += 1
                 else:
-                    bad.append(item[:60])
+                    dup += 1
+            for tok in toks[:600]:
+                rc = c.execute("SELECT * FROM relay_cards WHERE token=?", (tok,)).fetchone()
+                if not rc:
+                    bad.append("找不到直链:" + tok[:16])
+                    continue
+                line = relay_api._line(rc["phone"], rc["token"])
+                if _stock_insert(c, "relay", rc["id"], line, rc["phone"],
+                                 rc["country"] or country, cate,
+                                 ctype or (rc["card_type"] or ""), price, batch, note):
+                    added += 1
+                else:
+                    dup += 1
     if not added and not dup:
         return err("没有可回收的卡密：请检查链接是否属于本站、是否已被使用", 400, bad=bad[:20])
     security.audit("shop_stock_recover", "alert", ip=_ip(request), actor=s["username"],
                    detail={"mode": mode, "added": added, "dup": dup, "batch": batch,
                            "cate": cate, "type": ctype, "price": price})
     return ok(added=added, dup=dup, bad=bad[:20], batch=batch, cate=cate, card_type=ctype,
+              parsed=len(keys) + len(toks) if mode != "relay" else added + dup,
               price=money(price), available=sum(g["count"] for g in stock_groups()))
 
 
