@@ -8,7 +8,7 @@
 <meta name="description" content="按平台选购接码号码：显示成功率与实时价格，下单即发直链卡密，接收验证码即刻可用。">
 <link rel="stylesheet" href="/static/style.css?v=20261024i">
 <link rel="stylesheet" href="/static/landing.css?v=20261024i">
-<link rel="stylesheet" href="/static/shop.css?v=20261030g">
+<link rel="stylesheet" href="/static/shop.css?v=20261030i">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1220'/%3E%3Cpath d='M18 34l9 9 19-22' stroke='%2334e0b0' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body class="pub lp sh" data-page="shop" data-off="{{ '1' if shop_off else '0' }}" data-rcode-url="{{ rcode_url }}">
@@ -58,21 +58,34 @@
   </section>
 
   <section class="sh-guide" id="guide">
-    <div class="g-step">
-      <b>01</b>
-      <h4>先购买充值码</h4>
-      <p>最低 <strong>¥5</strong> 起充，支付完拿到 <code>SG-XXXX-XXXX-XXXX-XXXX</code> 充值码。</p>
-      <a class="btn primary sm" href="{{ rcode_url }}" target="_blank" rel="noopener">去购买充值码</a>
+    <div class="g-head">
+      <div>
+        <span class="g-kicker">HOW IT WORKS</span>
+        <h3>三步开号，先买充值码</h3>
+      </div>
+      <span class="g-badge">最低 ¥5 起充 · 支付即到账</span>
     </div>
-    <div class="g-step">
-      <b>02</b>
-      <h4>注册或充值</h4>
-      <p>注册时必填充值码，金额直接进余额；余额用完账号依然保留。</p>
-    </div>
-    <div class="g-step">
-      <b>03</b>
-      <h4>购买对应号码</h4>
-      <p>登录后选平台下单，立即拿到直链卡密，可反复刷新取码。</p>
+    <div class="g-grid">
+      <article class="g-step hot">
+        <span class="g-num">STEP 01</span>
+        <div class="g-ico">🎟️</div>
+        <h4>先购买充值码</h4>
+        <p>支付后立刻拿到 <code>SG-XXXX-XXXX-XXXX-XXXX</code> 充值码，金额直接进账户余额。</p>
+        <a class="g-cta" href="{{ rcode_url }}" target="_blank" rel="noopener"><span>去购买充值码</span><i>→</i></a>
+        <span class="g-min">最低 ¥5 起充</span>
+      </article>
+      <article class="g-step">
+        <span class="g-num">STEP 02</span>
+        <div class="g-ico">🔑</div>
+        <h4>注册或充值</h4>
+        <p>注册时必填充值码，金额直接进余额；余额用完账号仍保留。</p>
+      </article>
+      <article class="g-step">
+        <span class="g-num">STEP 03</span>
+        <div class="g-ico">📱</div>
+        <h4>购买对应号码</h4>
+        <p>登录后选平台下单，立即拿到直链卡密，可反复刷新取码。</p>
+      </article>
     </div>
   </section>
 
