@@ -10,7 +10,7 @@
 价格单位统一为「分」(price_cents)；USD 单价只作为后台参考展示。
 """
 from __future__ import annotations
-import hashlib, re, secrets, sqlite3, threading, time
+import hashlib, json, re, secrets, sqlite3, threading, time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -91,8 +91,27 @@ def yuan_to_cents(raw, allow_neg: bool = False) -> int:
     return int(round(v * 100))
 
 
+_ICON_INDEX = None
+
+
+def _icon_index() -> dict:
+    """static/icons/index.json：关键词 -> 图标文件名（真实品牌图标，构建时生成）。"""
+    global _ICON_INDEX
+    if _ICON_INDEX is None:
+        try:
+            p = config.STATIC_DIR / "icons" / "index.json"
+            _ICON_INDEX = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except Exception:
+            _ICON_INDEX = {}
+    return _ICON_INDEX
+
+
 def icon_for(name: str) -> str:
     low = (name or "").lower()
+    idx = _icon_index()
+    for kw in sorted(idx, key=len, reverse=True):
+        if kw in low:
+            return "i:" + idx[kw]
     for key, ico in ICON_RULES:
         if key in low:
             return ico
@@ -817,7 +836,7 @@ async def adm_product_save(request: Request):
         args.append(str(body.get("name"))[:60])
     if body.get("icon") not in (None, ""):
         sets.append("icon=?")
-        args.append(str(body.get("icon"))[:8])
+        args.append(str(body.get("icon"))[:64])
     if body.get("note") not in (None, ""):
         sets.append("note=?")
         args.append(str(body.get("note"))[:120])

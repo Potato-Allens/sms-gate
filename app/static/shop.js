@@ -109,11 +109,19 @@
 
   function rateClass(v) { return v >= 50 ? "" : "low"; }
 
+  function icoHtml(icon) {
+    var s = String(icon == null ? "" : icon);
+    if (s.indexOf("i:") === 0) {
+      return '<img alt="" loading="lazy" src="/static/icons/' + esc(s.slice(2)) + '">';
+    }
+    return esc(s || "\u{1F511}");
+  }
+
   function cardHtml(p) {
     var oos = p.stock <= 0;
     var rate = Math.max(2, Math.min(100, Number(p.success) || 0));
     return '<article class="sh-card' + (oos ? " off" : "") + '">' +
-      '<div class="sh-ico">' + esc(p.icon || "\u{1F511}") + "</div>" +
+      '<div class="sh-ico">' + icoHtml(p.icon) + "</div>" +
       '<div class="sh-cbody"><h3>' + esc(p.name) +
       (p.card_type ? '<span>' + esc(p.card_type) + "</span>" : "") + "</h3>" +
       '<div class="sh-tags">' +

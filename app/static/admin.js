@@ -1119,7 +1119,7 @@
     const rows = (d.products || []).map((p) => {
       const onoff = p.enabled ? badge("在售", "g") : badge("下架", "");
       const stock = p.stock > 0 ? p.stock : badge("缺货", "bad");
-      return "<tr><td class='mono'>" + p.id + "</td><td style='font-size:16px'>" + esc(p.icon) +
+      return "<tr><td class='mono'>" + p.id + "</td><td>" + icoHtml(p.icon) +
         "</td><td><b>" + esc(p.name) + "</b><div class='mono small'>appId " + p.app_id +
         " · type " + p.ptype + "</div></td><td>" + esc(p.cate_name || "—") +
         "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" + p.success + "%</td>" +
@@ -1311,6 +1311,16 @@
       "<th>操作</th></tr></thead><tbody>" +
       (rows || "<tr><td colspan=10 class='empty'>暂无用户</td></tr>") + "</tbody></table></div>" +
       pager(d.total, d.page, d.size);
+  }
+
+  function icoHtml(icon, size) {
+    const s = String(icon == null ? "" : icon);
+    const px = size || 18;
+    if (s.indexOf("i:") === 0) {
+      return '<img src="/static/icons/' + esc(s.slice(2)) + '" alt="" loading="lazy" style="width:' +
+        px + "px;height:" + px + 'px;object-fit:contain;vertical-align:middle">';
+    }
+    return esc(s || "🔑");
   }
 
   async function pageStock() {
