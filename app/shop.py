@@ -857,7 +857,8 @@ async def adm_product_save(request: Request):
     db.conn().execute("UPDATE shop_products SET " + ",".join(sets) + " WHERE id=?", tuple(args))
     security.audit("shop_product_save", "alert", ip=_ip(request), actor=s["username"],
                    detail={"id": pid, "fields": body})
-    return ok()
+    r2 = db.q1("SELECT price_cents FROM shop_products WHERE id=?", (pid,))
+    return ok(price=money(r2["price_cents"]) if r2 else "")
 @admin_router.post("/api/shop/product/add")
 async def adm_product_add(request: Request):
     s = _admin(request)

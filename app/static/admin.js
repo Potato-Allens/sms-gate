@@ -1034,6 +1034,7 @@
     const cf = await api("/admin/api/shop/settings");
     if (!ov.ok) { content.innerHTML = '<div class="empty">' + esc(ov.error) + "</div>"; return; }
     const s = cf.settings || {};
+    S.shopRate = Number(s.shop_usd_cny || 7.2) || 7.2;
     const on = (v) => (String(v) === "1" ? " selected" : "");
     const sel = (val, cur) => (String(val) === String(cur) ? " selected" : "");
     content.innerHTML =
@@ -1077,7 +1078,7 @@
       "</form></div>" +
 
       '<div class="card mt18">' +
-      '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价（元）为唯一结算口径</span></div>' +
+      '<div class="card-title"><h3>商品与定价</h3><span class="hint">售价框已按 USD × 汇率预填，可直接改；「保存价格」只保存当前这一行</span></div>' +
       '<div class="row gap10 wrap mt8">' +
       '<input id="shopQ" placeholder="搜索平台 / 分类" value="' + esc(st.q) + '" style="max-width:260px">' +
       '<select id="shopStatus">' + opt("all", "全部", st.status) + opt("on", "在售", st.status) +
@@ -1119,6 +1120,7 @@
     const d = await api("/admin/api/shop/products?" + q.toString());
     if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
     if ($("shopTotal")) $("shopTotal").textContent = "共 " + d.total + " 个商品";
+    const rate = Number(S.shopRate || 7.2) || 7.2;
     const rows = (d.products || []).map((p) => {
       const onoff = p.enabled ? badge("在售", "g") : badge("下架", "");
       const stock = p.stock > 0 ? p.stock : badge("缺货", "bad");
@@ -1127,8 +1129,9 @@
         " · type " + p.ptype + "</div></td><td>" + esc(p.cate_name || "—") +
         "</td><td>" + esc(p.card_type || "—") + "</td><td class='mono'>" + p.success + "%</td>" +
         "<td class='mono'>$" + Number(p.usd || 0).toFixed(3) + "</td>" +
-        "<td><input class='shop-price' data-id='" + p.id + "' value='" + yuan(p.price_cents) +
-        "' style='width:84px'></td><td class='mono'>" + stock + "</td><td>" + onoff +
+        "<td><input class='shop-price' data-id='" + p.id + "' data-usd='" + Number(p.usd || 0) +
+        "' value='" + (Number(p.usd || 0) * rate).toFixed(2) +
+        "' style='width:90px'></td><td class='mono'>" + stock + "</td><td>" + onoff +
         "</td><td><button class='btn mini' data-act='shop-save' data-id='" + p.id +
         "'>保存价格</button> <button class='btn mini' data-act='shop-toggle' data-id='" + p.id +
         "' data-on='" + (p.enabled ? "0" : "1") + "'>" + (p.enabled ? "下架" : "上架") +
@@ -1478,8 +1481,19 @@
       const inp = document.querySelector(".shop-price[data-id='" + id + "']");
       const d = await api("/admin/api/shop/product", { method: "POST",
         body: { id, price_yuan: inp ? inp.value : "" } });
-      toast(d.ok ? "价格已保存" : (d.error || "保存失败"), d.ok ? "good" : "bad");
-      return d.ok && loadShopProducts();
+      toast(d.ok ? ("已保存 ¥" + d.price) : (d.error || "保存失败"), d.ok ? "good" : "bad");
+      if (d.ok) {
+        // 只回写当前行，不重建表格：其它输入框里没保存的修改保持原样
+        if (inp) {
+          inp.classList.add("saved");
+          setTimeout(() => inp.classList.remove("saved"), 1200);
+        }
+        const old = el.textContent;
+        el.textContent = "已保存";
+        el.disabled = true;
+        setTimeout(() => { el.textContent = old; el.disabled = false; }, 1200);
+      }
+      return;
     }
     if (act === "shop-toggle") {
       const d = await api("/admin/api/shop/product", { method: "POST",
