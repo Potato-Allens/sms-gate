@@ -1069,6 +1069,8 @@
       '<label class="fld">允许缺货下单<select name="shop_allow_oos"><option value="0"' + sel("0", s.shop_allow_oos === "1" ? "x" : "0") + ">不允许（推荐）</option><option value=\"1\"" + sel("1", s.shop_allow_oos) + ">允许</option></select></label>" +
       '<label class="fld">卡密有效期（天，0=永久）<input name="shop_order_days" value="' + esc(s.shop_order_days || "0") + '"></label>' +
       '<label class="fld">每人每小时下单上限<input name="shop_buy_per_hour" value="' + esc(s.shop_buy_per_hour || "20") + '"></label>' +
+      '<label class="fld">每人 24 小时下单上限（0=不限）<input name="shop_max_orders_per_user" value="' + esc(s.shop_max_orders_per_user || "0") + '"></label>' +
+      '<label class="fld">最低充值额（元，充值码面额下限）<input name="shop_min_recharge" value="' + esc(s.shop_min_recharge || "5") + '"></label>' +
       '<label class="fld">同步每个分类页数<input name="shop_sync_pages" value="' + esc(s.shop_sync_pages || "1") + '"></label>' +
       '<label class="fld full">只同步这些分类（留空=全部；可填分类 ID 或名称，逗号分隔）<input name="shop_sync_cates" value="' + esc(s.shop_sync_cates || "") + '" placeholder="例如 美国(实卡),英国卡"></label>' +
       '<label class="fld">充值码购买链接（商城/登录/注册/个人中心的「去购买」按钮）<input name="shop_rcode_url" value="' + esc(s.shop_rcode_url || "https://wzyp.cn/item/dk067f") + '"></label>' +
@@ -1113,7 +1115,8 @@
       const body = {};
       ["shop_on", "shop_register_on", "shop_usd_cny", "shop_markup_pct", "shop_allow_oos",
        "shop_order_days", "shop_buy_per_hour", "shop_sync_pages", "shop_sync_cates",
-       "shop_stock_on", "shop_register_need_code", "shop_url", "shop_rcode_url"].forEach((k) => {
+       "shop_stock_on", "shop_register_need_code", "shop_url", "shop_rcode_url",
+       "shop_max_orders_per_user", "shop_min_recharge"].forEach((k) => {
         if (f[k]) body[k] = f[k].value;
       });
       const d = await api("/admin/api/shop/settings", { method: "POST", body });

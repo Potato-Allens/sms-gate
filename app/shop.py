@@ -215,16 +215,31 @@ def user_public(u) -> dict:
 # ------------------------------------------------------------------ 商品
 def _product_row(p) -> dict:
     flag = FLAGS.get(p["country"] or "", "🌐")
+    country = p["country"] or ""
+    ctype = p["card_type"] or type_name(p["ptype"])
+    note = p["note"] or ""
+    if country == "cn":
+        # 国内商品按「实卡 / 虚拟卡」售卖：标签和说明都跟随商品本身，
+        # 不能出现「筛选=国内(实卡)、说明=实卡/虚卡自动匹配」这种自相矛盾。
+        req = _cn_card_type(p["cate_name"], p["card_type"])
+        if req == "实卡":
+            ctype = "实卡"
+            note = note or "国内实卡通道 · 只发实卡号码"
+        elif req == "虚卡":
+            ctype = "虚拟卡"
+            note = note or "国内虚拟卡通道 · 只发虚拟运营商号码"
+        else:
+            ctype = "国内号码"
     return {
         "id": p["id"], "name": p["name"], "icon": p["icon"] or icon_for(p["name"]),
         "cate_name": p["cate_name"] or "", "cate_id": p["cate_id"],
-        "country": p["country"] or "", "flag": flag,
-        "card_type": p["card_type"] or type_name(p["ptype"]),
+        "country": country, "flag": flag,
+        "card_type": ctype,
         "success": round(float(p["success"] or 0), 2),
         "usd": round(float(p["upstream_price_usd"] or 0), 3),
         "stock": int(p["stock"] or 0),
         "price_cents": int(p["price_cents"] or 0), "price": money(p["price_cents"]),
-        "enabled": int(p["enabled"] or 0), "note": p["note"] or "",
+        "enabled": int(p["enabled"] or 0), "note": note,
         "provider": (p["provider"] if "provider" in p.keys() else "nexsms") or "nexsms",
         "sms_keyword": (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or "",
         "sms_prefix": (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or "",
@@ -249,15 +264,15 @@ def visible_products(region: str = "", ctype: str = "", q: str = "") -> list:
 
 # 国内实卡 / 虚卡：货源 d1jiema（按「豆包」关键词取号），appId 用负数避免和上游 ID 撞车
 CN_SEED = [
-    (-1, 1, "豆包", "国内(实卡)", "cn", 200),
-    (-2, 1, "豆包", "国内(虚拟卡)", "cn", 150),
+    (-1, 1, "豆包", "国内(实卡)", "cn", 200, "实卡"),
+    (-2, 1, "豆包", "国内(虚拟卡)", "cn", 150, "虚拟卡"),
 ]
 
 
 def seed_cn_products() -> None:
     """补上国内实卡/虚卡两个商品（仅缺失时插入，不动已有定价与开关）。"""
     now = int(time.time())
-    for app_id, ptype, name, cate, country, price in CN_SEED:
+    for app_id, ptype, name, cate, country, price, ctype in CN_SEED:
         try:
             db.conn().execute(
                 "INSERT INTO shop_products(app_id,ptype,name,icon,cate_id,cate_name,country,"
@@ -265,8 +280,15 @@ def seed_cn_products() -> None:
                 "created_at,updated_at,provider) "
                 "SELECT ?,?,?,?,0,?,?,?,0,0,?,?,1,0,'',?,?,'d1jiema' "
                 "WHERE NOT EXISTS (SELECT 1 FROM shop_products WHERE cate_name=? AND name=?)",
-                (app_id, ptype, name, icon_for(name), cate, country, "首次卡",
+                (app_id, ptype, name, icon_for(name), cate, country, ctype,
                  9999, price, now, now, cate, name))
+        except Exception:
+            pass
+        try:
+            # 历史遗留的「首次卡/续费卡」标签纠正成实卡/虚拟卡（幂等）
+            db.conn().execute(
+                "UPDATE shop_products SET card_type=? WHERE cate_name=? AND name=? "
+                "AND (card_type IS NULL OR card_type<>?)", (ctype, cate, name, ctype))
         except Exception:
             pass
 
@@ -362,7 +384,10 @@ async def api_stock_buy(request: Request):
     idem = str(body.get("idem") or "").strip()[:64]
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", idem or ""):
         idem = secrets.token_hex(12)
-    allowed, retry = security.hit_shared("shopbuy:%s" % u["user_id"], 60, 3600)
+    cap_msg = _daily_cap_blocked(u["user_id"])
+    if cap_msg:
+        return err(cap_msg, 429)
+    allowed, retry = security.hit_shared("shopstock:%s" % u["user_id"], 60, 3600)
     if not allowed:
         return err("下单过于频繁，请 %d 分钟后重试" % max(1, retry // 60), 429)
     now = int(time.time())
@@ -371,8 +396,11 @@ async def api_stock_buy(request: Request):
             ex = c.execute("SELECT * FROM shop_orders WHERE user_id=? AND idem=?",
                            (u["user_id"], idem)).fetchone()
             if ex:
+                bal_now = c.execute("SELECT balance_cents FROM shop_users WHERE id=?",
+                                    (u["user_id"],)).fetchone()
                 return ok(order=order_public(dict(ex)), replay=True,
-                          balance=money(u["balance_cents"]))
+                          balance=money(bal_now["balance_cents"]),
+                          balance_cents=int(bal_now["balance_cents"]))
             row = c.execute(
                 "SELECT * FROM shop_stock WHERE status='available' AND cate_name=? "
                 "AND card_type=? ORDER BY price_cents, id LIMIT 1", (cate, ctype)).fetchone()
@@ -617,6 +645,21 @@ def _reap_pending(uid: int) -> None:
             pass
 
 
+def _daily_cap_blocked(uid: int) -> str:
+    """每个用户 24 小时下单上限（shop_max_orders_per_user，0=不限）。"""
+    try:
+        cap = max(0, min(500, int(db.get_setting("shop_max_orders_per_user", "0") or 0)))
+    except Exception:
+        cap = 0
+    if not cap:
+        return ""
+    n = db.q1("SELECT COUNT(*) AS n FROM shop_orders WHERE user_id=? AND created_at>?",
+              (uid, int(time.time()) - 86400))["n"]
+    if int(n) >= cap:
+        return "24 小时内下单已达上限 %d 单，请稍后再试" % cap
+    return ""
+
+
 def _cn_card_type(cate_name: str, card_type: str = "") -> str:
     """国内商品分类 -> d1jiema cardType（实卡 / 虚卡 / 全部）。"""
     tag = (cate_name or "") + " " + (card_type or "")
@@ -665,7 +708,11 @@ def _buy_cn(p) -> dict:
         raise ShopError("国内通道维护中，请稍后再试", 503)
     ct = _cn_card_type(p["cate_name"], p["card_type"])
     try:
-        phone = d1jiema.get_phone("", ct)
+        kw = (p["sms_keyword"] or "").strip() if "sms_keyword" in p.keys() else ""
+    except Exception:
+        kw = ""
+    try:
+        phone = d1jiema.get_phone(kw, ct)
     except d1jiema.D1Busy as e:
         raise ShopError(str(e) or "国内通道繁忙，请稍后重试", 503)
     except d1jiema.D1Error as e:
@@ -735,6 +782,13 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
             raise ShopError("商品不存在", 404)
         if not int(p["enabled"]):
             raise ShopError("该商品已下架")
+        try:
+            synced = (float(p["upstream_price_usd"] or 0) > 0
+                      or float(p["success"] or 0) > 0)
+        except Exception:
+            synced = False
+        if synced and int(p["stock"] or 0) <= 0 and db.get_setting("shop_allow_oos", "0") != "1":
+            raise ShopError("该商品暂时缺货，请稍后再来或换个平台", 409)
         price = int(p["price_cents"] or 0)
         if price <= 0:
             raise ShopError("商品价格未设置，请联系客服")
@@ -764,16 +818,23 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
         note = "商城 | %s | %s | %s" % (p["name"], p["cate_name"] or "", p["card_type"] or "")
         ctype_now = p["card_type"] or ""
         if (p["country"] or "") == "cn":
-            ctype_now = cn_sim_type(got["phone"])
+            # 以「我们向上游请求的类型」为准：号段反推会跟实际售卖的卡型打架
+            req = _cn_card_type(p["cate_name"], p["card_type"])
+            ctype_now = "虚拟卡" if req == "虚卡" else ("实卡" if req == "实卡" else "")
         pkw = (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or ""
         ppx = (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or ""
         row = _create_relay(got["phone"], got["upstream"], p["country"] or "", note,
                             days, "shop:" + str(uid), ctype_now, pkw, ppx)
         done = int(time.time())
-        db.conn().execute(
+        cur = db.conn().execute(
             "UPDATE shop_orders SET status='done', relay_card_id=?, relay_token=?, phone=?, "
-            "link=?, done_at=? WHERE id=?",
+            "link=?, done_at=? WHERE id=? AND status='pending'",
             (row["id"], row["token"], got["phone"], row["line"], done, oid))
+        if cur.rowcount != 1:
+            # 订单已被超时回收/退款：作废刚生成的卡，避免白拿一个号
+            db.conn().execute("UPDATE relay_cards SET status='disabled' WHERE id=?",
+                              (row["id"],))
+            raise ShopError("订单已超时关闭并退款，请重新下单", 409)
         security.audit("shop_order", "info", ip=ip, actor="u%d" % uid,
                        detail={"order": oid, "product": p["name"], "price": price})
         o = db.q1("SELECT * FROM shop_orders WHERE id=?", (oid,))
@@ -809,6 +870,9 @@ async def api_buy(request: Request):
     idem = str(body.get("idem") or "").strip()[:64]
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", idem or ""):
         idem = secrets.token_hex(12)
+    cap_msg = _daily_cap_blocked(u["user_id"])
+    if cap_msg:
+        return err(cap_msg, 429)
     try:
         limit = max(1, min(200, int(db.get_setting("shop_buy_per_hour", "20") or 20)))
     except Exception:
@@ -1294,8 +1358,13 @@ async def adm_rcodes_create(request: Request):
         amount = yuan_to_cents(body.get("amount_yuan") or 0)
     except ShopError as e:
         return err(str(e))
-    if amount < 100:
-        return err("单张充值码金额至少 1 元")
+    try:
+        floor_yuan = float(db.get_setting("shop_min_recharge", "5") or 5)
+    except Exception:
+        floor_yuan = 5.0
+    floor = max(10, min(100000, int(round(floor_yuan * 100))))
+    if amount < floor:
+        return err("单张充值码金额不能低于 %s 元（商城设置里的最低充值额）" % money(floor))
     try:
         days = max(0, min(3650, int(body.get("expires_days") or 0)))
     except Exception:

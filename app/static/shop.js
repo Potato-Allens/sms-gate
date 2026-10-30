@@ -169,7 +169,8 @@
         ? '<div class="sh-meter"><span>成功率 ' + esc(p.success) + "%</span>" +
           '<span class="sh-bar"><i class="' + rateClass(p.success) + '" style="width:' +
           rate + '%"></i></span></div>'
-        : '<div class="sh-meter"><span class="sh-direct">国内直连通道 · 实卡/虚卡自动匹配</span></div>') +
+        : '<div class="sh-meter"><span class="sh-direct">' +
+          esc(p.note || "直连上游通道") + "</span></div>") +
       "</div>" +
       '<div class="sh-buy"><div class="sh-price">¥<b>' + esc(p.price) + "</b></div>" +
       '<button class="btn primary" data-buy="' + p.id + '"' + (oos ? " disabled" : "") + ">" +
@@ -266,7 +267,7 @@
       '<div class="sh-stock-flag">' + esc(g.flag || "\u{1F310}") + "</div>" +
       '<div class="sh-stock-main"><b>' + esc(g.cate_name) +
       (g.card_type ? "<span>" + esc(g.card_type) + "</span>" : "") + "</b>" +
-      "<small>剩余 <b>" + esc(g.count) + "</b> 个 · 售完自动从平台补货</small></div>" +
+      "<small>剩余 <b>" + esc(g.count) + "</b> 个 · 售罄后请到上方商城按平台选购</small></div>" +
       '<div class="sh-stock-buy"><div class="sh-price">¥<b>' + esc(g.price) + "</b></div>" +
       '<button class="btn primary sm" type="button" data-stock="1" data-cate="' + esc(g.cate_name) +
       '" data-ctype="' + esc(g.card_type || "") + '">现货直发</button></div></article>';

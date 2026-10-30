@@ -386,10 +386,10 @@ DEFAULTS = {
     "shop_allow_oos": "0",
     "shop_order_days": "0",
     "shop_buy_per_hour": "20",
-    "shop_min_recharge": "1000",
+    "shop_min_recharge": "5",
     "shop_sync_cates": "",
     "shop_sync_pages": "1",
-    "shop_max_orders_per_user": "3",
+    "shop_max_orders_per_user": "0",
     "shop_stock_on": "1",
     "shop_register_need_code": "1",
 }
