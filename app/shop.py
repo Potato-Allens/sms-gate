@@ -180,8 +180,15 @@ def require_user(request: Request) -> dict:
 
 
 def _csrf(request: Request, sess: dict, body: dict) -> None:
-    security.require_csrf(request, request.headers.get("x-csrf", "") or body.get("csrf", ""),
-                          sess["csrf"])
+    try:
+        security.require_csrf(request, request.headers.get("x-csrf", "") or body.get("csrf", ""),
+                              sess["csrf"])
+    except HTTPException:
+        # 已登录用户 token 失效要留痕，方便排查「用户下单失败」
+        security.audit("shop_csrf_stale", "warn", ip=_ip(request),
+                       actor="u%s" % sess.get("user_id", ""),
+                       detail={"path": request.url.path})
+        raise
 
 
 async def _body(request: Request) -> dict:
