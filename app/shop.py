@@ -1357,6 +1357,9 @@ async def adm_stock_recover(request: Request):
     body = await _body(request)
     _ac(request, s, body)
     mode = str(body.get("mode") or "links")
+    # 保险：前端忘了切模式时，只要粘了链接就按粘贴回收处理
+    if mode == "relay" and str(body.get("text") or "").strip():
+        mode = "links"
     cate = str(body.get("cate_name") or "").strip()[:40]
     ctype = str(body.get("card_type") or "").strip()[:16]
     country = country_of(cate)

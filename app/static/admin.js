@@ -1436,7 +1436,7 @@
       '<span class="hint">已售出的卡密继续有效；回收只针对未售出的卡，入库后优先于上游进货发货</span></div>' +
       '<form id="stockForm" class="form-grid">' +
       '<label class="fld">回收方式<select name="mode">' +
-      '<option value="relay">自动回收：未读直链卡</option>' +
+      '<option value="relay">自动回收：未读直链卡（需填运营商）</option>' +
       '<option value="links">粘贴卡密链接</option></select></label>' +
       '<label class="fld">运营商 / 分类<input name="cate_name" placeholder="美国(实卡) / 英国卡 / 香港卡"></label>' +
       '<label class="fld">卡类型<select name="card_type"><option value="">不限 / 按原卡</option>' +
@@ -1450,7 +1450,7 @@
       '<textarea name="text" rows="5" placeholder="https://12456.cfd/c/XXXX-XXXX-XXXX-XXXX&#10;卡号:+17798001455----https://api.12456.cfd/smsrecord?token=...&#10;（可整段粘贴，垃圾文字不用删）"></textarea></label>' +
       '<div class="fld full"><button class="btn primary" type="submit">开始回收</button>' +
       '<button class="btn ghost" type="button" data-act="stock-preview" style="margin-left:8px">预览可回收数量</button>' +
-      '<div class="help" id="stockHint">同一「运营商 + 卡类型」统一售价；卡密链接必须粘贴上传（库里只存哈希，明文无法还原）。</div></div>' +
+      '<div class="help" id="stockHint">' + esc(st.flash || "注意：粘贴了链接会自动切到「粘贴卡密链接」模式；同「运营商 + 卡类型」统一售价；卡密链接必须粘贴上传（库里只存哈希，明文无法还原）。") + '</div></div>' +
       "</form></div>" +
 
       '<div class="card mt18"><div class="card-title"><h3>库存分组</h3>' +
@@ -1485,6 +1485,12 @@
     const body = {};
     fd.forEach((v, k) => { body[k] = v; });
     const hint = $("stockHint");
+    const pasted0 = String(body.text || "").trim();
+    if (pasted0 && (body.mode || "relay") === "relay") {
+      body.mode = "links";
+      if (form.elements && form.elements["mode"]) form.elements["mode"].value = "links";
+      toast("检测到粘贴内容，已自动切换为「粘贴卡密链接」回收", "good");
+    }
     if ((body.mode || "links") === "relay") {
       const pv = await api("/admin/api/shop/stock/preview?" + new URLSearchParams({
         cate_name: body.cate_name || "", card_type: body.card_type || "",
@@ -1500,10 +1506,12 @@
     }
     if (hint) hint.textContent = "正在回收…";
     const d = await api("/admin/api/shop/stock/recover", { method: "POST", body });
+    const stk = S.pageState.stock = S.pageState.stock || {};
     if (!d.ok) {
       toast(d.error || "回收失败", "bad");
       if (hint) hint.textContent = (d.bad && d.bad.length)
         ? "跳过：" + d.bad.join(" / ") : (d.error || "回收失败");
+      stk.flash = hint ? hint.textContent : "";
       return;
     }
     const skip = (d.bad && d.bad.length) ? ("，跳过 " + d.bad.length + " 条") : "";
@@ -1512,6 +1520,8 @@
     if (hint) hint.textContent = (d.bad && d.bad.length)
       ? ("入库 " + d.added + " 个" + skip + "：" + d.bad.slice(0, 6).join(" / "))
       : ("入库 " + d.added + " 个，批次 " + d.batch);
+    stk.flash = (hint ? hint.textContent : "") +
+      (d.available != null ? ("；当前在库 " + d.available + " 张") : "");
     pageStock();
   }
 
@@ -1520,6 +1530,20 @@
     if (act === "stock-preview") {
       const f = $("stockForm");
       const get = (n) => (f && f.elements[n] ? f.elements[n].value : "");
+      const pasted1 = String(get("text") || "").trim();
+      if (pasted1) {
+        const n = cleanCardText(pasted1).split("\n").filter(Boolean).length;
+        if (f && f.elements["mode"] && f.elements["mode"].value === "relay") {
+          f.elements["mode"].value = "links";
+        }
+        const hint0 = $("stockHint");
+        toast(n ? ("识别到 " + n + " 条链接，点「开始回收」即可入库")
+                : "没识别到卡密链接，检查一下格式", n ? "good" : "bad");
+        if (hint0) hint0.textContent = n
+          ? ("已将回收方式切为「粘贴卡密链接」，识别到 " + n + " 条，点「开始回收」入库")
+          : "没识别到卡密链接：支持 /c/XXXX-XXXX-XXXX-XXXX 与 token=... 两种格式";
+        return;
+      }
       const d = await api("/admin/api/shop/stock/preview?" + new URLSearchParams({
         cate_name: get("cate_name"), card_type: get("card_type"),
         days: get("days") || "0" }).toString());
@@ -1712,6 +1736,10 @@
     ta.value = ta.value.slice(0, s0) + cleaned + ta.value.slice(s1);
     ta.selectionStart = ta.selectionEnd = s0 + cleaned.length;
     const n = cleaned.split("\n").filter(Boolean).length;
+    const sf = ta.closest("#stockForm");
+    if (sf && sf.elements["mode"] && sf.elements["mode"].value === "relay") {
+      sf.elements["mode"].value = "links";
+    }
     toast("已自动剔除无关文字，保留 " + n + " 条链接", "good");
   });
 
