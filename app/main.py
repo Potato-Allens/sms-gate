@@ -173,6 +173,9 @@ def shop_login_page(request: Request):
 
 @app.get("/shop/me", response_class=HTMLResponse)
 def shop_me_page(request: Request):
+    # 未登录直接跳登录页：不依赖前端 JS（旧缓存/JS 失败时也不会漏出个人中心）
+    if not shop.get_user(request):
+        return RedirectResponse("/shop/login?next=/shop/me", status_code=302)
     return render("shop_me.html", request)
 
 
