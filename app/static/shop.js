@@ -273,6 +273,7 @@
           '<div class="sh-cfm-prod"><b>' + esc(opt.name || "号码") + "</b>" +
             (opt.meta ? "<span>" + esc(opt.meta) + "</span>" : "") +
             (opt.price ? '<i class="sh-cfm-price">¥' + esc(opt.price) + "</i>" : "") + "</div>" +
+          '<p class="sh-cfm-tip"><b>温馨提示：</b>上游号池有可能把别人用过的号码再分配给你（撞号），这是上游决定的、我们控制不了，想好了再买。<b>只要还没点「确认购买」，随时可以退出；一旦点了，不管你用没用，都退不了。</b></p>' +
           '<ul class="sh-cfm-list">' + list.map(function (x) { return "<li>" + x + "</li>"; }).join("") +
           "</ul>" +
           '<p class="sh-cfm-q">确认平台、国家都选对了吗？点错就没法退了。</p>' +
