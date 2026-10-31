@@ -296,6 +296,7 @@
 .sh-exp{margin-top:8px;font-size:12.5px;color:#ffd79b;letter-spacing:.01em}
 .sh-kw{margin-top:5px;font-size:11.5px;color:#c9a97a;line-height:1.5}
 .sh-tbl td .btn.tiny+.btn.tiny{margin-left:6px}
+.sh-tbl td:last-child{white-space:nowrap}
 .sh-expcell{color:#c9a97a;font-size:11.5px;min-width:206px;max-width:250px;line-height:1.6}
 @keyframes shCfmFade{from{opacity:0}to{opacity:1}}
 @keyframes shCfmPop{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}

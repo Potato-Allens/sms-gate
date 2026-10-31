@@ -339,10 +339,12 @@ def api_me(request: Request):
     u = get_user(request)
     if not u:
         return ok(user=None, csrf="")
-    orders = db.q("SELECT * FROM shop_orders WHERE user_id=? ORDER BY id DESC LIMIT 30",
-                  (u["user_id"],))
+    rows = db.q("SELECT o.*, c.sms_keyword AS card_kw FROM shop_orders o "
+                "LEFT JOIN relay_cards c ON c.id=o.relay_card_id "
+                "WHERE o.user_id=? ORDER BY o.id DESC LIMIT 30", (u["user_id"],))
     return ok(user=user_public(u), csrf=u["csrf"],
-              orders=[order_public(o) for o in orders])
+              orders=[order_public(o, (o["card_kw"] if "card_kw" in o.keys() else "") or "")
+                      for o in rows])
 
 
 @router.get("/shop/api/products")
@@ -1489,13 +1491,14 @@ def adm_orders(request: Request, status: str = "", q: str = "", page: int = 1, s
                   "ON u.id=o.user_id WHERE " + where, tuple(args))["n"]
     page = max(1, int(page or 1))
     size = max(10, min(200, int(size or 50)))
-    rows = db.q("SELECT o.*, u.username FROM shop_orders o LEFT JOIN shop_users u "
-                "ON u.id=o.user_id WHERE " + where +
+    rows = db.q("SELECT o.*, u.username, c.sms_keyword AS card_kw FROM shop_orders o "
+                "LEFT JOIN shop_users u ON u.id=o.user_id "
+                "LEFT JOIN relay_cards c ON c.id=o.relay_card_id WHERE " + where +
                 " ORDER BY o.id DESC LIMIT ? OFFSET ?",
                 tuple(args) + (size, (page - 1) * size))
     out = []
     for r in rows:
-        d = order_public(r)
+        d = order_public(r, (r["card_kw"] if "card_kw" in r.keys() else "") or "")
         d["username"] = r["username"] or ("#" + str(r["user_id"]))
         d["user_id"] = r["user_id"]
         out.append(d)
