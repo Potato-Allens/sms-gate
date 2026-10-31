@@ -1219,7 +1219,7 @@
         (p.provider === "d1jiema" ? " · <span class='prov-cn'>国内 d1</span>" : "") +
         "</div></td><td>" + esc(p.cate_name || "—") +
         "</td><td>" + esc(p.card_type || "—") +
-        "</td><td class='mono small'>" + esc(p.sms_keyword || "豆包") +
+        "</td><td class='mono small'>" + esc(p.sms_keyword || (p.sms_prefix ? "—（仅按前缀）" : "—（不过滤）")) +
         (p.sms_prefix ? "<br>" + esc(p.sms_prefix) : "") +
         " <button class='btn mini' data-act='shop-kw' data-id='" + p.id +
         "' data-kw='" + esc(p.sms_keyword || "") + "' data-pref='" + esc(p.sms_prefix || "") +
