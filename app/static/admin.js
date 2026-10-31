@@ -1105,7 +1105,8 @@
       '<div class="row gap10 wrap">' +
       '<select id="regService">' +
       [["go", "Google,youtube,Gmail"], ["wa", "Whatsapp"], ["tg", "Telegram"],
-       ["ig", "Instagram+Threads"], ["fb", "facebook"], ["am", "Amazon"]]
+       ["ig", "Instagram+Threads"], ["fb", "facebook"], ["am", "Amazon"],
+       ["qq", "Tencent QQ（腾讯）"], ["ot", "任意项目（Any other 自定义）"]]
         .map(function (x) { return '<option value="' + x[0] + '">' + x[1] + "</option>"; }).join("") +
       "</select>" +
       '<button class="btn" type="button" data-act="shop-reg-load">刷新上游目录</button>' +

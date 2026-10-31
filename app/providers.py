@@ -1312,7 +1312,8 @@ def _poll_d1jiema(number: dict) -> dict:
 # 面板侧目录接口（user.nexsms.net）本身是公开的：不带 apiKey 也能读到，
 # 所以前端/后台永远不会看到密钥，密钥只在服务端下单时使用。
 REG_SERVICES = [("go", "Google,youtube,Gmail"), ("wa", "Whatsapp"), ("tg", "Telegram"),
-                ("ig", "Instagram+Threads"), ("fb", "facebook"), ("am", "Amazon")]
+                ("ig", "Instagram+Threads"), ("fb", "facebook"), ("am", "Amazon"),
+                ("qq", "Tencent QQ"), ("ot", "任意项目")]
 
 # 上游国家名 -> ISO2，只用于商城展示国旗 / 地区筛选
 REG_ISO = {

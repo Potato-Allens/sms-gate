@@ -633,14 +633,18 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
     pref = (row["sms_prefix"] if "sms_prefix" in row.keys() else "") or ""
     meta = {}
     good, why, text = await run_in_threadpool(_fetch, upstream, 15, kw, meta)
-    if good and pref and upstream.startswith(("d1jiema:", "nexreg:")):
+    if good and (pref or kw) and upstream.startswith(("d1jiema:", "nexreg:")):
         # 只把属于该平台的短信交给买家：不匹配前缀且不含关键词 → 当作还没收到
         try:
             from .providers import _nex_prefix_ok
             t = (text or "").strip()
             body = t.split("|", 1)[1].strip() if ("|" in t and t.split("|", 1)[0].isdigit()) else t
-            if t and t != "0|0" and not _nex_prefix_ok(body, pref) and not (kw and kw in t):
-                text = "0|0"
+            if t and t != "0|0":
+                # 前缀与关键词是「或」的关系；只填关键词时，关键词就是唯一门槛。
+                hit_pref = bool(pref) and _nex_prefix_ok(body, pref)
+                hit_kw = bool(kw) and (kw in t)
+                if not hit_pref and not hit_kw:
+                    text = "0|0"
         except Exception:
             pass
     exp = int(meta.get("expire_at") or 0)

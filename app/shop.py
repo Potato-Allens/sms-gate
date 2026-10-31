@@ -1183,6 +1183,10 @@ def _reg_plan(service: str, force: bool = False) -> list:
     rate = float(db.get_setting("shop_usd_cny", "7.20") or 7.2)
     markup = float(db.get_setting("shop_markup_pct", "40") or 40)
     label = _reg_label(service)
+    try:
+        svc_idx = [c for c, _ in REG_SERVICES].index((service or "go").strip())
+    except Exception:
+        svc_idx = 0
     out = []
     for r in providers.regular_catalog(service, force=force):
         if r["success"] <= 0:
@@ -1201,7 +1205,7 @@ def _reg_plan(service: str, force: bool = False) -> list:
             # 分类只按「项目」聚合：不然 40 个国家会把商城地区筛选塞满
             "cate_name": ("普通号 · " + label)[:40],
             "price_cents": _round_price(usd * rate * (1.0 + markup / 100.0) * 100),
-            "app_id": -(10000 + int(r["country_id"])),
+            "app_id": -(10000 + svc_idx * 1000 + int(r["country_id"])),
         })
     return out
 
