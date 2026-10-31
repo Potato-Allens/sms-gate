@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from . import db, providers, security
 
@@ -278,17 +278,22 @@ def _create_sync(items, note: str, days: int, actor: str):
         cur = c.execute("INSERT INTO batches(batch_no,count,note,created_by,created_at) VALUES(?,?,?,?,?)",
                         (batch_no, len(items), note, actor, now))
         bid = cur.lastrowid
+        try:
+            d1_ttl = max(1, min(120, int(db.get_setting("d1jiema_ttl_min", "20") or 20)))
+        except Exception:
+            d1_ttl = 20
         for it in items:
             token = _new_token(c)
             expires = now + days * 86400 if days else 0
+            num_expire = now + d1_ttl * 60 if str(it.get("upstream") or "").startswith("d1jiema:") else 0
             cur2 = c.execute(
                 "INSERT INTO relay_cards(token,phone,country,upstream_enc,note,status,batch_id,"
-                "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix) "
-                "VALUES(?,?,?,?,?,'active',?,?,?,?,?,?,?)",
+                "created_at,created_by,expires_at,card_type,sms_keyword,sms_prefix,num_expire_at) "
+                "VALUES(?,?,?,?,?,'active',?,?,?,?,?,?,?,?)",
                 (token, it["phone"], it.get("country", ""), security.enc(it["upstream"]),
                  (it.get("note") or note)[:120], bid, now, actor, expires,
                  (it.get("card_type") or "")[:16], (it.get("sms_keyword") or "")[:40],
-                 (it.get("sms_prefix") or "")[:40]))
+                 (it.get("sms_prefix") or "")[:40], num_expire))
             out.append({"id": cur2.lastrowid, "phone": it["phone"], "token": token,
                         "expires_at": expires, "line": _line(it["phone"], token)})
     return batch_no, out
@@ -575,6 +580,126 @@ def relay_export(request: Request, ids: str = "", batch: int = 0):
     return {"ok": True, "count": len(lines), "text": "\n".join(lines)}
 
 
+_RELAY_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>接码 · __PHONE__</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(1200px 600px at 50% -10%,#12314a 0%,#070b14 60%);
+color:#e8f1ff;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+display:flex;align-items:center;justify-content:center;padding:20px}
+.card{width:100%;max-width:520px;background:rgba(14,24,40,.88);border:1px solid #1e3350;border-radius:18px;
+padding:26px 24px;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.brand{font-size:12px;letter-spacing:.16em;color:#6f8fb8;text-transform:uppercase}
+.phone{font-size:23px;font-weight:600;margin:8px 0 2px;font-variant-numeric:tabular-nums}
+.meta{font-size:12.5px;color:#8fa8c6;min-height:18px}
+.code{margin:18px 0 6px;padding:18px;border-radius:14px;background:#0a1420;border:1px dashed #24405f;text-align:center;
+min-height:92px;display:flex;align-items:center;justify-content:center}
+.code b{font-size:40px;letter-spacing:.16em;color:#5ef0c4;font-variant-numeric:tabular-nums}
+.wait{font-size:15px;color:#9fb4cf}
+.msg{margin-top:8px;font-size:12.5px;color:#93a9c4;word-break:break-all;white-space:pre-wrap}
+.warn{margin-top:14px;padding:10px 12px;border-radius:10px;background:#3a2a12;border:1px solid #6b4a1c;color:#ffcf8a;
+font-size:12.5px;display:none}
+.st{margin-top:14px;font-size:12.5px;display:flex;gap:9px;align-items:center;color:#8fa8c6}
+.dot{width:8px;height:8px;border-radius:50%;background:#5ef0c4;box-shadow:0 0 0 4px rgba(94,240,196,.13)}
+button{margin-top:16px;width:100%;padding:12px;border-radius:12px;border:1px solid #2a4a2f;background:#123a2a;
+color:#7bf0c0;font-size:14px;cursor:pointer}
+</style></head><body data-token="__TOKEN__" data-exp="__EXPIRE__" data-meta="__META__">
+<div class="card">
+  <div class="brand">SMS GATE · 接码</div>
+  <div class="phone">__PHONE__</div>
+  <div class="meta" id="meta">__META__</div>
+  <div class="code" id="box"><span class="wait">等待短信到达…</span></div>
+  <div class="msg" id="text"></div>
+  <div class="warn" id="warn">__WARN__</div>
+  <div class="st"><span class="dot"></span><span id="state">每 15 秒自动刷新</span></div>
+  <button id="cp" type="button">复制验证码</button>
+</div>
+<script src="/smsrecord.js?v=1"></script>
+</body></html>"""
+
+# 页面脚本走同源外链：站点 CSP 是 script-src 'self'，内联脚本会被浏览器拦截。
+_RELAY_JS = """(function(){
+  var body = document.body;
+  var token = body.dataset.token || "";
+  var exp = Number(body.dataset.exp || 0);
+  var baseMeta = body.dataset.meta || "";
+  var lastCode = "";
+  function pad(n){ return ("0" + n).slice(-2); }
+  function fmt(s){ s = String(s || ""); return s.indexOf("1|") === 0 ? s.slice(2) : s; }
+  function tick(){
+    var el = document.getElementById("meta"), w = document.getElementById("warn");
+    if(!el) return;
+    if(!exp){ el.textContent = baseMeta; return; }
+    var left = exp - Math.floor(Date.now() / 1000);
+    if(left > 0){
+      el.textContent = "预估有效期剩余 " + Math.floor(left / 60) + " 分 " + pad(left % 60) + " 秒";
+      if(w) w.style.display = "none";
+    } else {
+      el.textContent = "预估有效期已过";
+      if(w) w.style.display = "block";
+    }
+  }
+  function render(d){
+    var box = document.getElementById("box"), tx = document.getElementById("text"), st = document.getElementById("state");
+    if(!box) return;
+    var code = (d && d.code) || "";
+    if(code){
+      box.innerHTML = "<b>" + code + "</b>";
+      lastCode = code;
+      if(tx) tx.textContent = fmt(d.text);
+      if(st) st.textContent = "已收到短信";
+    } else if(!lastCode){
+      box.innerHTML = '<span class="wait">等待短信到达…</span>';
+      if(tx && d && d.text && d.text !== "0|0"){ tx.textContent = fmt(d.text); }
+    }
+  }
+  function poll(){
+    var url = location.pathname + "?token=" + encodeURIComponent(token) + "&fmt=json&_=" + Date.now();
+    fetch(url, {headers: {"Accept": "application/json"}, cache: "no-store"})
+      .then(function(r){ return r.json(); })
+      .then(render).catch(function(){});
+  }
+  var cp = document.getElementById("cp");
+  if(cp) cp.addEventListener("click", function(){
+    if(!lastCode) return;
+    if(navigator.clipboard){ navigator.clipboard.writeText(lastCode); return; }
+    var t = document.createElement("textarea");
+    t.value = lastCode; document.body.appendChild(t); t.select();
+    try { document.execCommand("copy"); } catch(e) {}
+    t.remove();
+  });
+  tick(); setInterval(tick, 1000); poll(); setInterval(poll, 15000);
+})();
+"""
+
+
+@router.get("/smsrecord.js")
+def relay_js():
+    return PlainTextResponse(_RELAY_JS, media_type="application/javascript",
+                             headers={"Cache-Control": "public, max-age=300",
+                                      "X-Content-Type-Options": "nosniff"})
+
+
+def _wants_html(request) -> bool:
+    """浏览器直接打开链接时给一个看不到 0|0 的页面；脚本/工具照旧拿纯文本。"""
+    if (request.query_params.get("fmt") or "").strip():
+        return False
+    acc = (request.headers.get("accept") or "").lower()
+    return "text/html" in acc
+
+
+def _relay_page(phone: str, token: str, expire_at: int, meta: str, warn: str) -> str:
+    import html as _h
+    return (_RELAY_PAGE
+            .replace("__PHONE__", _h.escape(phone or ""))
+            .replace("__TOKEN__", _h.escape(token or ""))
+            .replace("__META__", _h.escape(meta or ""))
+            .replace("__WARN__", _h.escape(warn or ""))
+            .replace("__EXPIRE__", str(int(expire_at or 0))))
+
 # ---------------------------------------------------------------- public relay
 @router.options(PUBLIC_PATH)
 def relay_options():
@@ -663,9 +788,18 @@ async def relay_sms(request: Request, token: str = "", fmt: str = "", code: str 
 
     db.conn().execute("UPDATE relay_cards SET reads=reads+1, last_read_at=?, last_ip=? WHERE id=?",
                       (now, ip, row["id"]))
+    num_exp = int(row["num_expire_at"] or 0) if "num_expire_at" in row.keys() else 0
+    expired = bool(num_exp and num_exp < now)
+    xh = {**CORS, "X-Card-Expires": str(num_exp), "X-Card-Expired": "1" if expired else "0"}
     if fmt == "json":
         return JSONResponse({"ok": True, "phone": row["phone"], "code": _extract_code(text),
-                             "text": text.strip(), "at": now}, headers=CORS)
+                             "text": text.strip(), "at": now,
+                             "expire_at": num_exp, "expired": expired}, headers=xh)
     if code in ("1", "true", "yes"):
-        return PlainTextResponse(_extract_code(text), headers=CORS)
-    return PlainTextResponse(text, headers=CORS)
+        return PlainTextResponse(_extract_code(text), headers=xh)
+    if _wants_html(request):
+        meta = "\u9884\u4f30\u6709\u6548\u671f\u672a\u77e5" if not num_exp else ""
+        warn = ("\u9884\u4f30\u6709\u6548\u671f\u5df2\u8fc7\uff0c\u4e0a\u6e38\u53ef\u80fd\u5df2\u56de\u6536\u8be5\u53f7\u7801\uff1b"
+                "\u5982\u679c\u4e00\u76f4\u6536\u4e0d\u5230\uff0c\u8bf7\u91cd\u65b0\u8d2d\u4e70\u3002")
+        return HTMLResponse(_relay_page(row["phone"], token, num_exp, meta, warn), headers=xh)
+    return PlainTextResponse(text, headers=xh)

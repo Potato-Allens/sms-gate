@@ -744,7 +744,11 @@ def _buy_cn(p) -> dict:
         raise ShopError(str(e) or "国内通道繁忙，请稍后重试", 503)
     except d1jiema.D1Error as e:
         raise ShopError(str(e) or "国内取号失败，请稍后重试", 502)
-    return {"phone": "+86" + phone, "upstream": "d1jiema:" + phone}
+    try:
+        ttl = max(1, min(120, int(db.get_setting("d1jiema_ttl_min", "20") or 20)))
+    except Exception:
+        ttl = 20
+    return {"phone": "+86" + phone, "upstream": "d1jiema:" + phone, "ttl_min": ttl}
 
 
 def _buy_upstream(p) -> dict:
