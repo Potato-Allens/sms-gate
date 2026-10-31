@@ -169,8 +169,8 @@
         ? '<div class="sh-meter"><span>成功率 ' + esc(p.success) + "%</span>" +
           '<span class="sh-bar"><i class="' + rateClass(p.success) + '" style="width:' +
           rate + '%"></i></span></div>'
-        : '<div class="sh-meter"><span class="sh-direct">' +
-          esc(p.note || "直连上游通道") + "</span></div>") +
+        : (p.note ? "" : '<div class="sh-meter"><span class="sh-direct">直连上游通道</span></div>')) +
+      (p.note ? '<div class="sh-note">' + esc(p.note) + "</div>" : "") +
       "</div>" +
       '<div class="sh-buy"><div class="sh-price">¥<b>' + esc(p.price) + "</b></div>" +
       '<button class="btn primary" data-buy="' + p.id + '"' + (oos ? " disabled" : "") + ">" +
@@ -275,7 +275,14 @@
             (opt.price ? '<i class="sh-cfm-price">¥' + esc(opt.price) + "</i>" : "") + "</div>" +
           '<p class="sh-cfm-tip"><b>温馨提示：</b>上游号池有可能把别人用过的号码再分配给你（撞号），这是上游决定的、我们控制不了，想好了再买。<b>只要还没点「确认购买」，随时可以退出；一旦点了，不管你用没用，都退不了。</b></p>' +
           '<ul class="sh-cfm-list">' + list.map(function (x) { return "<li>" + x + "</li>"; }).join("") +
+            (opt.askKw ? "<li><b>国内卡支持自定义接收关键字；豆包风控极严，号码正常也可能不下发豆包验证码，此情况不退款。</b></li>" : "") +
           "</ul>" +
+          (opt.askKw
+            ? '<div class="sh-cfm-kw"><label for="shCfmKw">接收关键字（可修改）</label>' +
+              '<input id="shCfmKw" maxlength="20" autocomplete="off" value="' + esc(opt.kw || "") +
+              '" placeholder="豆包 / 抖音 / 验证码">' +
+              '<span>填平台名或短信里的字词（如：豆包、抖音、美团）。不填默认按「验证码」匹配，任何平台的验证码都会放行。</span></div>'
+            : "") +
           '<p class="sh-cfm-q">确认平台、国家都选对了吗？点错就没法退了。</p>' +
           '<div class="sh-cfm-acts">' +
             '<button type="button" class="btn ghost" data-cfm="no">再想想</button>' +
@@ -300,8 +307,10 @@
       function close(v) {
         clearInterval(timer);
         document.removeEventListener("keydown", onKey);
+        var inp = wrap.querySelector("#shCfmKw");
+        var kw = inp ? String(inp.value || "").trim().slice(0, 20) : "";
         if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-        resolve(!!v);
+        resolve({ ok: !!v, kw: kw });
       }
       document.addEventListener("keydown", onKey);
       wrap.addEventListener("click", function (e) {
@@ -322,13 +331,19 @@
     var p = (STATE.all || []).filter(function (x) { return String(x.id) === String(pid); })[0] || {};
     var meta = [(p.flag || ""), (p.cate_name || ""), (p.card_type || "")].filter(Boolean).join(" · ");
     if (Number(p.success) > 0) meta += " · 成功率 " + p.success + "%";
-    var yes = await confirmBuy({ name: p.name || "号码", price: p.price || "", meta: meta });
-    if (!yes) return;
+    var askKw = String(p.country || "") === "cn" || String(p.provider || "") === "d1jiema";
+    var res = await confirmBuy({
+      name: p.name || "号码", price: p.price || "", meta: meta,
+      askKw: askKw, kw: p.sms_keyword || "验证码"
+    });
+    if (!res || !res.ok) return;
     if (STATE.busy) return;
     STATE.busy = true;
     if (btn) { btn.disabled = true; btn.textContent = "发货中…"; }
     var idem = randomIdem();
-    api("/shop/api/buy", { method: "POST", body: { product_id: Number(pid), idem: idem } })
+    var payload = { product_id: Number(pid), idem: idem };
+    if (askKw && res.kw) payload.keyword = res.kw;
+    api("/shop/api/buy", { method: "POST", body: payload })
       .then(function (d) {
         STATE.busy = false;
         if (!d.ok) {
@@ -397,13 +412,13 @@
       if (STATE.stock[i].cate_name === btn.dataset.cate &&
           (STATE.stock[i].card_type || "") === (btn.dataset.ctype || "")) { g = STATE.stock[i]; break; }
     }
-    var yes = await confirmBuy({
+    var res = await confirmBuy({
       kind: "stock",
       name: (btn.dataset.cate || "现货卡密") + (btn.dataset.ctype ? " · " + btn.dataset.ctype : ""),
       price: g ? g.price : "",
       meta: "现货直发 · 售出不退"
     });
-    if (!yes) return;
+    if (!res || !res.ok) return;
     if (STATE.busy) return;
     STATE.busy = true;
     var old = btn.textContent;

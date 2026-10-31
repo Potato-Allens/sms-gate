@@ -277,10 +277,11 @@ def visible_products(region: str = "", ctype: str = "", q: str = "") -> list:
     return [_product_row(r) for r in db.q(sql, tuple(args))]
 
 
-# 国内实卡 / 虚卡：货源 d1jiema（按「豆包」关键词取号），appId 用负数避免和上游 ID 撞车
+# 国内实卡 / 虚拟卡：货源 d1jiema，关键字由买家自定义（默认「验证码」）
+CN_NOTE = "支持自定义接收关键字（豆包/抖音/美团等）· 豆包风控严可能不下发验证码，此情况不退款"
 CN_SEED = [
-    (-1, 1, "豆包", "国内(实卡)", "cn", 200, "实卡"),
-    (-2, 1, "豆包", "国内(虚拟卡)", "cn", 150, "虚拟卡"),
+    (-1, 1, "国内实卡", "国内(实卡)", "cn", 200, "实卡"),
+    (-2, 1, "国内虚拟卡", "国内(虚拟卡)", "cn", 150, "虚拟卡"),
 ]
 
 
@@ -292,11 +293,11 @@ def seed_cn_products() -> None:
             db.conn().execute(
                 "INSERT INTO shop_products(app_id,ptype,name,icon,cate_id,cate_name,country,"
                 "card_type,upstream_price_usd,success,stock,price_cents,enabled,sort,note,"
-                "created_at,updated_at,provider) "
-                "SELECT ?,?,?,?,0,?,?,?,0,0,?,?,1,0,'',?,?,'d1jiema' "
+                "created_at,updated_at,provider,sms_keyword,sms_prefix) "
+                "SELECT ?,?,?,?,0,?,?,?,0,0,?,?,1,0,?,?,?,'d1jiema','验证码','' "
                 "WHERE NOT EXISTS (SELECT 1 FROM shop_products WHERE cate_name=? AND name=?)",
                 (app_id, ptype, name, icon_for(name), cate, country, ctype,
-                 9999, price, now, now, cate, name))
+                 9999, price, now, now, CN_NOTE, cate, name))
         except Exception:
             pass
         try:
@@ -728,16 +729,21 @@ def fix_cn_card_types() -> dict:
     return {"relay": rl, "stock": st}
 
 
-def _buy_cn(p) -> dict:
-    """国内实卡/虚卡：从 d1jiema 按「豆包」关键词取一个号。"""
+def _buy_cn(p, kw: str = "") -> dict:
+    """国内实卡/虚拟卡：从 d1jiema 取一个号。关键字由买家自定义（默认「验证码」）。
+
+    d1jiema 的 getPhone / getMsg 都支持 keyWord：取号时按项目走池子，
+    取码时按关键字过滤。所以国内卡可以接任意平台的码，不再锁死豆包。
+    """
     from . import d1jiema
     if not d1jiema.enabled():
         raise ShopError("国内通道维护中，请稍后再试", 503)
     ct = _cn_card_type(p["cate_name"], p["card_type"])
     try:
-        kw = (p["sms_keyword"] or "").strip() if "sms_keyword" in p.keys() else ""
+        pkw = (p["sms_keyword"] or "").strip() if "sms_keyword" in p.keys() else ""
     except Exception:
-        kw = ""
+        pkw = ""
+    kw = (kw or "").strip() or pkw or "验证码"
     try:
         phone = d1jiema.get_phone(kw, ct)
     except d1jiema.D1Busy as e:
@@ -751,7 +757,7 @@ def _buy_cn(p) -> dict:
     return {"phone": "+86" + phone, "upstream": "d1jiema:" + phone, "ttl_min": ttl}
 
 
-def _buy_upstream(p) -> dict:
+def _buy_upstream(p, kw: str = "") -> dict:
     prov = ""
     try:
         prov = str(p["provider"] or "")
@@ -760,7 +766,7 @@ def _buy_upstream(p) -> dict:
     if prov == "nexsms_regular":
         return _buy_regular(p)
     if prov == "d1jiema" or (p["country"] or "") == "cn":
-        return _buy_cn(p)
+        return _buy_cn(p, kw)
     payload = {
         "appId": int(p["app_id"]), "type": int(p["ptype"]), "quantity": 1,
         "expiry": int(db.get_setting("nexsms_expiry", "0") or 0),
@@ -842,7 +848,7 @@ def _create_relay(phone: str, upstream: str, country: str, note: str, days: int,
                 "num_expire_at": num_expire, "line": relay_api._line(phone, token)}
 
 
-def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
+def _buy_sync(uid: int, pid: int, idem: str, ip: str, kw: str = "") -> dict:
     now = int(time.time())
     if not idem:
         idem = secrets.token_hex(12)      # user_id+idem 唯一：空串不能复用
@@ -885,7 +891,7 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
                   (uid, -price, bal, "buy", str(oid), "购买 %s" % p["name"], now))
 
     try:
-        got = _buy_upstream(p)
+        got = _buy_upstream(p, kw)
         try:
             days = max(0, min(3650, int(db.get_setting("shop_order_days", "0") or 0)))
         except Exception:
@@ -896,8 +902,11 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
             # 以「我们向上游请求的类型」为准：号段反推会跟实际售卖的卡型打架
             req = _cn_card_type(p["cate_name"], p["card_type"])
             ctype_now = "虚拟卡" if req == "虚卡" else ("实卡" if req == "实卡" else "")
-        pkw = (p["sms_keyword"] if "sms_keyword" in p.keys() else "") or ""
-        ppx = (p["sms_prefix"] if "sms_prefix" in p.keys() else "") or ""
+        # 买家自定义了关键字：只按这个词过滤（清掉商品自带的【前缀】）；
+        # 没填则回落到商品默认关键词。
+        ukw = (kw or "").strip()
+        pkw = ukw or ((p["sms_keyword"] if "sms_keyword" in p.keys() else "") or "")
+        ppx = "" if ukw else ((p["sms_prefix"] if "sms_prefix" in p.keys() else "") or "")
         try:
             ttl = int(got.get("ttl_min") or 0)
         except Exception:
@@ -918,7 +927,7 @@ def _buy_sync(uid: int, pid: int, idem: str, ip: str) -> dict:
         security.audit("shop_order", "info", ip=ip, actor="u%d" % uid,
                        detail={"order": oid, "product": p["name"], "price": price})
         o = db.q1("SELECT * FROM shop_orders WHERE id=?", (oid,))
-        return {"order": order_public(dict(o)), "replay": False}
+        return {"order": order_public(dict(o), ukw or pkw), "replay": False}
     except Exception as e:
         msg = str(e) or "发货失败"
         with db.tx() as c:
@@ -950,6 +959,9 @@ async def api_buy(request: Request):
     idem = str(body.get("idem") or "").strip()[:64]
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", idem or ""):
         idem = secrets.token_hex(12)
+    kw = str(body.get("keyword") or "").strip()[:20]
+    if kw and any(ch in kw for ch in "|\r\n\t<>"):
+        return err("接收关键字不合法（不能包含 | 换行 < >）")
     cap_msg = _daily_cap_blocked(u["user_id"])
     if cap_msg:
         return err(cap_msg, 429)
@@ -962,7 +974,7 @@ async def api_buy(request: Request):
         return err("下单过于频繁，请 %d 分钟后重试" % max(1, retry // 60), 429)
     _reap_pending(u["user_id"])
     try:
-        res = await run_in_threadpool(_buy_sync, u["user_id"], pid, idem, _ip(request))
+        res = await run_in_threadpool(_buy_sync, u["user_id"], pid, idem, _ip(request), kw)
     except ShopError as e:
         return err(str(e), e.code)
     except providers.ProviderBusy as e:

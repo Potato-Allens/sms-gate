@@ -305,3 +305,11 @@
   .sh-cfm-card{max-width:100%;border-radius:18px 18px 0 0;max-height:92vh}
   .sh-cfm-acts .btn{flex:1;min-width:0}
 }
+
+.sh-note{margin-top:7px;font-size:11.5px;line-height:1.55;color:#ffc978}
+.sh-cfm-kw{margin-top:13px;display:flex;flex-direction:column;gap:7px}
+.sh-cfm-kw label{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:#8fa8c6}
+.sh-cfm-kw input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #2a3f5c;background:#0b1524;
+color:#e8f1ff;font-size:14px;outline:none}
+.sh-cfm-kw input:focus{border-color:#3a6a8f}
+.sh-cfm-kw span{font-size:11.5px;line-height:1.6;color:#8fa8c6}
