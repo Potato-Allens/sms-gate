@@ -527,11 +527,16 @@
     }
     body.innerHTML = list.map(function (o) {
       var link = o.link || "";
+      var kw = o.keyword || "";
       var cell = link
-        ? '<div class="sh-link"><code title="' + esc(link) + '">' + esc(link) + "</code></div>"
+        ? '<div class="sh-link"><code title="' + esc(link) + '">' + esc(link) + "</code></div>" +
+          (kw ? '<div class="sh-kw">只收「' + esc(kw) + '」短信 · 收不到就点右边改</div>'
+              : '<div class="sh-kw">不过滤关键词（任何短信都放行）</div>')
         : '<span class="mono">' + esc(o.error || "—") + "</span>";
       var op = link
-        ? '<button class="btn tiny" data-copy="' + esc(link) + '">复制</button>'
+        ? '<button class="btn tiny" data-copy="' + esc(link) + '">复制</button>' +
+          '<button class="btn tiny ghost" data-kw="' + esc(o.id) + '" data-cur="' + esc(kw) +
+          '">关键词</button>'
         : '<span class="mono">—</span>';
       var expTxt2 = ttlText(o.expire_at);
       return "<tr><td class='mono'>" + fmt(o.created_at) + "</td><td>" + esc(o.name) +
@@ -555,6 +560,24 @@
   }
 
   function bindMe() {
+    var ob = $("orderBody");
+    if (ob) {
+      ob.addEventListener("click", function (e) {
+        var b = e.target.closest("[data-kw]");
+        if (!b) return;
+        var cur = b.dataset.cur || "";
+        var kw = window.prompt("这条卡密要接收哪个平台的短信？\n\n填平台名或短信里的字词，例如：豆包、日淘市集、验证码\n（填「验证码」最通用，但可能被同号上其它短信抢先）", cur);
+        if (kw === null) return;
+        kw = (kw || "").trim();
+        if (!kw) { toast("关键词不能为空", "bad"); return; }
+        api("/shop/api/orders/" + b.dataset.kw + "/keyword", { method: "POST", body: { keyword: kw } })
+          .then(function (d) {
+            if (!d.ok) { toast(d.error || "修改失败", "bad"); return; }
+            toast("关键词已改为「" + kw + "」，重新打开接码地址即可", "good");
+            loadMe();
+          });
+      });
+    }
     $("btnLogout").addEventListener("click", function () {
       api("/shop/api/logout", { method: "POST", body: {} }).then(function () {
         location.href = "/shop/login";

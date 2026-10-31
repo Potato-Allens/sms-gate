@@ -634,13 +634,14 @@ async def api_password(request: Request):
 
 
 # ------------------------------------------------------------------ 下单
-def order_public(o) -> dict:
+def order_public(o, keyword: str = "") -> dict:
     return {
         "id": o["id"], "name": o["app_name"], "country": o["country"],
         "card_type": o["card_type"], "price": money(o["price_cents"]),
         "status": o["status"], "phone": o["phone"], "link": o["link"],
         "error": o["error"], "created_at": o["created_at"], "done_at": o["done_at"],
         "expire_at": (o["num_expire_at"] if "num_expire_at" in o.keys() else 0) or 0,
+        "keyword": keyword or "",
     }
 
 
@@ -977,9 +978,42 @@ def api_orders(request: Request, page: int = 1, size: int = 20):
     page = max(1, int(page or 1))
     size = max(5, min(50, int(size or 20)))
     total = db.q1("SELECT COUNT(*) AS n FROM shop_orders WHERE user_id=?", (u["user_id"],))["n"]
-    rows = db.q("SELECT * FROM shop_orders WHERE user_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+    rows = db.q("SELECT o.*, c.sms_keyword AS card_kw FROM shop_orders o "
+                "LEFT JOIN relay_cards c ON c.id=o.relay_card_id "
+                "WHERE o.user_id=? ORDER BY o.id DESC LIMIT ? OFFSET ?",
                 (u["user_id"], size, (page - 1) * size))
-    return ok(orders=[order_public(o) for o in rows], total=int(total), page=page, size=size)
+    return ok(orders=[order_public(o, (o["card_kw"] if "card_kw" in o.keys() else "") or "")
+                      for o in rows], total=int(total), page=page, size=size)
+
+
+@router.post("/shop/api/orders/{oid}/keyword")
+async def api_order_keyword(oid: int, request: Request):
+    """买家自助改「收码关键词」：上游不支持关键字过滤，只能我们这层按词放行。"""
+    u = require_user(request)
+    body = await _body(request)
+    _csrf(request, u, body)
+    kw = str(body.get("keyword") or "").strip()
+    if any(ch in kw for ch in ("|", "\r", "\n", "\t")):
+        return err("关键词不能包含 | 或换行")
+    if not (1 <= len(kw) <= 20):
+        return err("关键词 1~20 个字，建议填平台名（豆包 / 日淘市集）或「验证码」")
+    allowed, _retry = security.hit_shared("ordkw:%d" % int(u["user_id"]), 60, 3600)
+    if not allowed:
+        return err("改关键词太频繁了，过一会儿再试", 429)
+    o = db.q1("SELECT * FROM shop_orders WHERE id=? AND user_id=?", (oid, int(u["user_id"])))
+    if not o:
+        return err("订单不存在", 404)
+    rid = o["relay_card_id"] or 0
+    if not rid:
+        return err("该订单还没有生成卡密", 400)
+    c = db.q1("SELECT * FROM relay_cards WHERE id=?", (rid,))
+    if not c or c["status"] != "active":
+        return err("卡密已停用，改关键词也没用，请联系客服", 403)
+    db.conn().execute("UPDATE relay_cards SET sms_keyword=?, sms_prefix='' WHERE id=?",
+                      (kw[:20], int(rid)))
+    security.audit("shop_order_keyword", "info", ip=_ip(request), actor=u["username"],
+                   detail={"order": oid, "card": int(rid), "keyword": kw[:20]})
+    return ok(keyword=kw[:20])
 
 
 # ================================================================== 后台
