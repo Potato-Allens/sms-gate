@@ -365,6 +365,8 @@
       '<form id="relayAllocForm" class="form-grid">' +
       '<label class="fld">号段<select name="choice">' + opt("us", "美国实卡") + opt("gb", "英国") +
       opt("hk", "香港") + opt("cn_real", "国内实卡") + opt("cn_virtual", "国内虚拟卡") + "</select></label>" +
+      '<label class="fld">平台项目（可选，优先于号段）<select name="platform">' +
+      opt("", "按号段取号") + opt("cursor", "Cursor · 美国实卡 · 首次卡") + "</select></label>" +
       '<label class="fld">数量<input name="count" type="number" min="1" max="50" value="1"></label>' +
       '<label class="fld">有效期（天，0 为永久）<input name="expires_days" type="number" min="0" max="3650" value="0"></label>' +
       '<label class="fld">项目关键词<input name="sms_keyword" placeholder="豆包 / TikTok / 平台名" value="' + esc(kwDef) + '"></label>' +
@@ -396,6 +398,15 @@
       '<button class="btn" id="relaySearch">搜索</button><div class="spacer"></div>' +
       '<button class="btn mini" data-act="relay-export">导出全部直链</button>' +
       '<span class="hint" id="relayTotal"></span></div><div class="mt12" id="relayTable"></div></div>';
+    const platSel = document.querySelector("#relayAllocForm select[name=platform]");
+    if (platSel) platSel.addEventListener("change", () => {
+      const f = $("relayAllocForm");
+      if (!f || !f.sms_keyword) return;
+      if (platSel.value) {
+        f.sms_keyword.value = ({ cursor: "Cursor" }[platSel.value]) || "";
+        if (f.sms_prefix) f.sms_prefix.value = "";
+      }
+    });
     $("relayStatus").addEventListener("change", () => { st.status = $("relayStatus").value; st.page = 1; loadRelay(); });
     $("relayQ").addEventListener("keydown", (e) => { if (e.key === "Enter") { st.q = $("relayQ").value.trim(); st.page = 1; loadRelay(); } });
     $("relaySearch").addEventListener("click", () => { st.q = $("relayQ").value.trim(); st.page = 1; loadRelay(); });
@@ -510,14 +521,17 @@
   async function allocateRelay() {
     const f = $("relayAllocForm");
     const n = Math.max(1, Math.min(50, Number(f.count.value) || 1));
-    const name = ({ us: "美国", gb: "英国", hk: "香港", cn_real: "国内实卡", cn_virtual: "国内虚拟卡" }[f.choice.value]) || f.choice.value;
+    const plat = f.platform ? f.platform.value : "";
+    const name = plat
+      ? ({ cursor: "Cursor" }[plat] || plat)
+      : (({ us: "美国", gb: "英国", hk: "香港", cn_real: "国内实卡", cn_virtual: "国内虚拟卡" }[f.choice.value]) || f.choice.value);
     if (!confirm("将真实购买 " + n + " 个" + name + "号码并生成直链卡，可能产生费用，确定？")) return;
     const btn = f.querySelector("button[type=submit]");
     const old = btn.textContent;
     btn.disabled = true;
     btn.textContent = "购买中…（最多 1 分钟）";
     const d = await api("/admin/api/relay/allocate", { method: "POST", body: {
-      choice: f.choice.value, count: n,
+      choice: f.choice.value, platform: plat, count: n,
       expires_days: Number(f.expires_days.value), note: f.note.value.trim(),
       sms_keyword: f.sms_keyword ? f.sms_keyword.value.trim() : "",
       sms_prefix: f.sms_prefix ? f.sms_prefix.value.trim() : "",

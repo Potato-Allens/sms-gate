@@ -437,10 +437,6 @@ async def relay_allocate(request: Request):
         body = {}
     _csrf(request, s, body)
     choice = str(body.get("choice") or "us").strip().lower()
-    if choice not in providers.CHOICES:
-        return err("无效的号段")
-    if choice not in providers.enabled_choices():
-        return err("该号段暂未开放", 403)
     try:
         count = max(1, min(50, int(body.get("count") or 1)))
     except Exception:
@@ -452,6 +448,43 @@ async def relay_allocate(request: Request):
     note = str(body.get("note") or "")[:120]
     kw = str(body.get("sms_keyword") or "").strip()[:40]
     pref = str(body.get("sms_prefix") or "").strip()[:40]
+
+    # 指定平台（如 Cursor）：按上游 appId 直购，不走号段池
+    platform = str(body.get("platform") or "").strip().lower()
+    if platform:
+        preset = providers.PREMIUM_PRESETS.get(platform)
+        if not preset:
+            return err("未知平台")
+        # 平台直购固定用平台名做关键词，并清空前缀：
+        # 否则后台默认的「豆包 / [豆包]」会把 Cursor 的短信全过滤掉。
+        kw = preset["name"]
+        pref = ""
+        try:
+            got = await run_in_threadpool(providers.premium_buy, preset["app_id"],
+                                          preset["type"], count)
+        except providers.ProviderBusy as e:
+            return err(str(e), 503, retry_after=getattr(e, "retry_after", 10))
+        except providers.ProviderError as e:
+            return err("取号失败：" + str(e)[:160], 502)
+        except Exception as e:
+            return err("取号异常：%s" % type(e).__name__, 502)
+        batch_no, rows = await run_in_threadpool(
+            _create_sync, [{"phone": g["phone"], "upstream": g["sms_url"],
+                            "country": preset["country"],
+                            "card_type": g.get("card_type") or preset["card_type"],
+                            "note": note, "sms_keyword": kw, "sms_prefix": pref}
+                           for g in got],
+            note, days, s["username"])
+        security.audit("relay_allocate", "alert", ip=security.client_ip(request),
+                       actor=s["username"],
+                       detail={"batch": batch_no, "platform": platform, "count": len(rows)})
+        return ok(batch=batch_no, count=len(rows), items=rows,
+                  lines=[x["line"] for x in rows], bad=[], platform=platform)
+
+    if choice not in providers.CHOICES:
+        return err("无效的号段")
+    if choice not in providers.enabled_choices():
+        return err("该号段暂未开放", 403)
     items, bad = await run_in_threadpool(_allocate_sync, choice, count)
     if not items:
         why = bad[0]["why"] if bad else "上游暂无可用号码"

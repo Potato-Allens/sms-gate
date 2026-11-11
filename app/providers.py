@@ -931,6 +931,54 @@ def _nex_purchase(country: str, qty: int):
     raise ProviderError("NexSMS 下单失败：%s" % msg)
 
 
+# 单平台直购（商城商品 / 后台指定平台生成直链）：按上游 appId 直接买号
+PREMIUM_PRESETS = {
+    "cursor": {"app_id": 1309, "type": 1, "name": "Cursor", "country": "us",
+               "cate_name": "美国(实卡)", "card_type": "首次卡"},
+}
+
+
+def premium_buy(app_id: int, ptype: int = 1, qty: int = 1) -> list:
+    """按 appId 直接买号，返回 [{phone, sms_url, card_type, app_name}]。"""
+    left = cooldown_left()
+    if left > 0:
+        raise ProviderBusy("上游限流冷却中，约 %d 秒后恢复" % left, retry_after=left)
+    payload = {"appId": int(app_id), "type": int(ptype),
+               "quantity": max(1, min(int(qty), 10)),
+               "expiry": _nex_expiry(), "prefix": None, "exclude_prefix": None}
+    try:
+        data = _nex_http("POST", "/api/premium/purchase", json=payload)
+    except ProviderBusy:
+        raise
+    except ProviderError as e:
+        msg = str(e)
+        low = msg.lower()
+        if ("余额" in msg) or ("balance" in low) or ("不足" in msg):
+            supply_block(180, "号源通道余额不足，请联系管理员充值后重试")
+            raise ProviderBusy("号源通道余额不足，请联系管理员充值后重试", retry_after=30)
+        if ("库存" in msg) or ("stock" in low) or ("sold" in low):
+            raise ProviderBusy("该平台暂时缺货，稍后再试", retry_after=10)
+        raise
+    out = []
+    for it in _nex_extract_items(data):
+        tel = str(it.get("tel") or "").strip()
+        access = it.get("smsAccess") or {}
+        url = str(access.get("url") or "").strip()
+        if not url and access.get("token"):
+            url = _nex_base() + "/api/number-access/sms-records?token=" + str(access.get("token"))
+        if not tel or not url:
+            continue
+        phone = tel if tel.startswith("+") else "+" + tel.lstrip("+")
+        t = int(it.get("type") or ptype)
+        out.append({"phone": phone, "sms_url": url,
+                    "app_name": str(it.get("appName") or ""),
+                    "card_type": _type_name(t)})
+    if not out:
+        raise ProviderError("上游下单成功但未返回号码")
+    cooldown_clear()
+    return out
+
+
 def _nex_store_items(items, country: str, card_id: int, app: dict) -> list:
     """Persist a batch: the first number goes to the caller, the rest become shared stock."""
     now = int(time.time())
