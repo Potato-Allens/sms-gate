@@ -1,0 +1,8 @@
+[Unit]
+Description=SMS Gate daily backup
+
+[Service]
+Type=oneshot
+User=smsgate
+Group=smsgate
+ExecStart=/opt/smsgate/deploy/backup.sh
