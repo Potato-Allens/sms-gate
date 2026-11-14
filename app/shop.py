@@ -296,8 +296,8 @@ def seed_cn_products() -> None:
                 "created_at,updated_at,provider,sms_keyword,sms_prefix) "
                 "SELECT ?,?,?,?,0,?,?,?,0,0,?,?,1,0,?,?,?,'d1jiema','验证码','' "
                 "WHERE NOT EXISTS (SELECT 1 FROM shop_products WHERE cate_name=? AND name=?)",
-                (app_id, ptype, name, icon_for(name), cate, country, ctype,
-                 9999, price, now, now, CN_NOTE, cate, name))
+                (app_id, ptype, name, "i:cn-sim.svg", cate, country, ctype,
+                 9999, price, CN_NOTE, now, now, cate, name))
         except Exception:
             pass
         try:

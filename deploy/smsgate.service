@@ -12,7 +12,7 @@ Environment=SMSGATE_ROOT=/opt/smsgate
 Environment=SMSGATE_PORT=8861
 Environment=SMSGATE_HOST=127.0.0.1
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/smsgate/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8861 --workers 2 --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/opt/smsgate/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8861 --workers 4 --limit-concurrency 400 --backlog 2048 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
